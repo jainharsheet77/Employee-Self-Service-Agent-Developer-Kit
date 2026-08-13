@@ -1,0 +1,220 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""
+ESS Maker Kit — Planner: a minimal MCP client for the WeveNova plan store.
+
+The planner can persist the Plan to a **WeveNova project plan** through an MCP
+server (the ``weve-plan`` server) instead of the local ``plan.json``. This module
+speaks just enough of the MCP *Streamable HTTP* transport to:
+
+  * ``initialize`` the session,
+  * list tools, and
+  * ``tools/call`` the ``weve-plan`` project-plan / task tools.
+
+It reads the server endpoint from the same ``.vscode/mcp.json`` the kit already
+uses for its MCP servers (so there is one runtime config, never committed), with
+``PLANNER_MCP_URL`` / ``PLANNER_MCP_HEADERS`` env overrides for tests/CI.
+
+Stdlib only (``urllib``) — no third-party dependency. Handles both a plain JSON
+response and an SSE (``text/event-stream``) response, and echoes an
+``Mcp-Session-Id`` when the server issues one.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import urllib.error
+import urllib.request
+from typing import Any
+
+DEFAULT_MCP_CONFIG = os.path.join(".vscode", "mcp.json")
+DEFAULT_SERVER_NAME = "weve-plan"
+PROTOCOL_VERSION = "2025-03-26"
+
+
+class McpError(RuntimeError):
+    """An MCP transport, protocol, or tool-level error."""
+
+
+def _extract_result(body: str, content_type: str) -> dict[str, Any]:
+    """Return the last JSON-RPC message from a JSON or SSE response body."""
+    if "text/event-stream" in (content_type or ""):
+        last: dict[str, Any] | None = None
+        for line in body.splitlines():
+            if line.startswith("data:"):
+                try:
+                    last = json.loads(line[5:].strip())
+                except json.JSONDecodeError:
+                    continue
+        if last is None:
+            raise McpError("no data frames in SSE response")
+        return last
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise McpError(f"non-JSON response: {body[:200]!r}") from exc
+
+
+class McpClient:
+    """A tiny JSON-RPC-over-HTTP MCP client for a single server."""
+
+    def __init__(self, url: str, headers: dict[str, str] | None = None, timeout: float = 90.0) -> None:
+        self.url = url
+        self.timeout = timeout
+        self._headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            **(headers or {}),
+        }
+        self._session_id: str | None = None
+        self._next_id = 0
+        self._initialized = False
+
+    # -- transport ------------------------------------------------------- #
+
+    def _post(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        headers = dict(self._headers)
+        if self._session_id:
+            headers["Mcp-Session-Id"] = self._session_id
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(self.url, data=data, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                sid = resp.headers.get("Mcp-Session-Id")
+                if sid:
+                    self._session_id = sid
+                raw = resp.read().decode("utf-8", errors="replace")
+                ctype = resp.headers.get("Content-Type", "")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")[:300]
+            raise McpError(f"HTTP {exc.code} from MCP server: {detail}") from exc
+        except urllib.error.URLError as exc:
+            raise McpError(f"cannot reach MCP server {self.url}: {exc.reason}") from exc
+        if "id" not in payload:  # a notification — no response body expected
+            return None
+        msg = _extract_result(raw, ctype)
+        if isinstance(msg, dict) and msg.get("error"):
+            err = msg["error"]
+            raise McpError(f"JSON-RPC error {err.get('code')}: {err.get('message')}")
+        return msg
+
+    def _rpc(self, method: str, params: dict[str, Any] | None = None) -> Any:
+        self._next_id += 1
+        msg = self._post({"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params or {}})
+        return (msg or {}).get("result")
+
+    # -- MCP surface ----------------------------------------------------- #
+
+    def initialize(self) -> dict[str, Any]:
+        result = self._rpc(
+            "initialize",
+            {
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "ess-planner", "version": "1.0"},
+            },
+        )
+        self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        self._initialized = True
+        return result or {}
+
+    def list_tools(self) -> list[dict[str, Any]]:
+        if not self._initialized:
+            self.initialize()
+        return (self._rpc("tools/list") or {}).get("tools", [])
+
+    def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
+        """Call a tool and return its parsed payload.
+
+        The ``weve-plan`` tools return one text content block that is a JSON
+        entity (or an upstream error string). Returns the parsed JSON object when
+        possible, else the raw text. Raises :class:`McpError` when the tool
+        reports ``isError`` or the upstream proxied an HTTP error.
+        """
+        if not self._initialized:
+            self.initialize()
+        result = self._rpc("tools/call", {"name": name, "arguments": arguments or {}}) or {}
+        blocks = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
+        text = "\n".join(blocks).strip()
+        if result.get("isError"):
+            raise McpError(f"tool {name} failed: {text[:300]}")
+        # The proxy surfaces upstream failures as a plain "Upstream ... returned NNN ..." string.
+        if text.startswith("Upstream ") and "returned" in text[:120]:
+            raise McpError(f"tool {name}: {text[:300]}")
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return text
+
+
+# -- config ------------------------------------------------------------- #
+
+def load_mcp_server(
+    name: str = DEFAULT_SERVER_NAME,
+    config_path: str | os.PathLike[str] = DEFAULT_MCP_CONFIG,
+) -> dict[str, Any]:
+    """Read a server's ``{url, headers}`` from a ``.vscode/mcp.json``-shaped file.
+
+    ``PLANNER_MCP_URL`` (and optional JSON ``PLANNER_MCP_HEADERS``) override the
+    file, so tests/CI need no config file on disk.
+    """
+    env_url = os.environ.get("PLANNER_MCP_URL")
+    if env_url:
+        headers = json.loads(os.environ.get("PLANNER_MCP_HEADERS", "{}"))
+        return {"url": env_url, "headers": headers}
+    try:
+        with open(config_path, "r", encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise McpError(
+            f"no MCP config at {config_path} and PLANNER_MCP_URL unset — add the "
+            f"'{name}' server to .vscode/mcp.json"
+        ) from exc
+    server = (cfg.get("servers") or {}).get(name)
+    if not server or not server.get("url"):
+        raise McpError(f"server {name!r} not found in {config_path}")
+    return {"url": server["url"], "headers": server.get("headers") or {}}
+
+
+def client_from_config(
+    name: str = DEFAULT_SERVER_NAME,
+    config_path: str | os.PathLike[str] = DEFAULT_MCP_CONFIG,
+    timeout: float = 90.0,
+) -> McpClient:
+    server = load_mcp_server(name, config_path)
+    return McpClient(server["url"], server.get("headers"), timeout=timeout)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """`python -m planner.mcp_client --ping` — verify connectivity + list tools."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Ping the planner's WeveNova MCP server.")
+    parser.add_argument("--server", default=DEFAULT_SERVER_NAME)
+    parser.add_argument("--config", default=DEFAULT_MCP_CONFIG)
+    parser.add_argument("--ping", action="store_true", help="initialize + list tools + try get_project_plan")
+    args = parser.parse_args(argv)
+
+    try:
+        client = client_from_config(args.server, args.config)
+        info = client.initialize()
+        print(f"connected: {info.get('serverInfo', {}).get('name')} {info.get('serverInfo', {}).get('version')}")
+        tools = client.list_tools()
+        print(f"tools ({len(tools)}): " + ", ".join(t.get("name", "") for t in tools))
+        if args.ping:
+            try:
+                plan = client.call_tool("get_project_plan", {})
+                keys = list(plan.keys()) if isinstance(plan, dict) else type(plan).__name__
+                print(f"get_project_plan OK — keys: {keys}")
+            except McpError as exc:
+                print(f"get_project_plan unavailable: {exc}")
+        return 0
+    except McpError as exc:
+        print(f"MCP error: {exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

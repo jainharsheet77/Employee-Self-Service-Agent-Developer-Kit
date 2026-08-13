@@ -54,8 +54,33 @@ def _csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _store(args: argparse.Namespace):
+    """Build the Plan store for this invocation (local file, or WeveNova MCP)."""
+    from planner.plan_store import PlanStoreError, make_store
+
+    backend = getattr(args, "store", None) or os.environ.get("PLANNER_STORE", "local")
+    try:
+        return make_store(
+            backend=backend,
+            plan_path=args.plan,
+            mcp_server=getattr(args, "mcp_server", "weve-plan"),
+            mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+        )
+    except PlanStoreError as exc:
+        raise SystemExit(f"plan store error: {exc}")
+
+
 def _load(args: argparse.Namespace) -> Plan:
-    return Plan.load_or_new(args.plan)
+    from planner.plan_store import PlanStoreError
+
+    store = _store(args)
+    try:
+        plan = store.load()
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot load the plan: {exc}")
+    for warning in getattr(store, "warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
+    return plan
 
 
 class PlanInvalidError(Exception):
@@ -67,13 +92,20 @@ class PlanInvalidError(Exception):
 
 
 def _save(plan: Plan, args: argparse.Namespace) -> None:
-    """Validate, then atomically persist — never overwrite the authoritative
-    plan with a document that ``validate`` would reject (over-limit collections,
-    invalid artifact kinds/states, orphan artifacts, ...)."""
+    """Validate, then persist through the active store — never persist a document
+    that ``validate`` would reject (over-limit collections, invalid artifact
+    kinds/states, orphan artifacts, ...). The store also (re)renders the ``.md``.
+    Any non-fatal store notices are printed to stderr."""
+    from planner.plan_store import PlanStoreError
+
     errors = plan.validate()
     if errors:
         raise PlanInvalidError(errors)
-    plan.save_all(args.plan)
+    try:
+        for notice in _store(args).save(plan):
+            print(f"note: {notice}", file=sys.stderr)
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot save the plan: {exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +113,14 @@ def _save(plan: Plan, args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------- #
 
 def cmd_init(args: argparse.Namespace) -> int:
+    backend = getattr(args, "store", None) or os.environ.get("PLANNER_STORE", "local")
+    if backend == "mcp":
+        # The WeveNova project plan is owned upstream — never create/overwrite it
+        # (a blind reconcile would delete its tasks). Load it and render the view.
+        plan = _load(args)
+        plan.write_summary(_store(args).summary_path)
+        print("Using the existing WeveNova project plan (owned upstream); rendered the plan view.")
+        return 0
     if os.path.exists(args.plan) and not args.force:
         print(f"A plan already exists at {args.plan}. Use --force to overwrite.", file=sys.stderr)
         return 1
@@ -465,7 +505,15 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="planner", description="ESS Maker Kit planner CLI")
-    parser.add_argument("--plan", default=PLAN_PATH, help="path to plan.json")
+    parser.add_argument("--plan", default=PLAN_PATH, help="path to plan.json (local store) / where the .md view is written")
+    parser.add_argument(
+        "--store",
+        choices=["local", "mcp"],
+        default=os.environ.get("PLANNER_STORE", "local"),
+        help="where the Plan is persisted: 'local' (plan.json, default) or 'mcp' (WeveNova project plan via the weve-plan MCP server). The ESS-scenario-plan.md view is rendered either way.",
+    )
+    parser.add_argument("--mcp-server", dest="mcp_server", default="weve-plan", help="MCP server name in .vscode/mcp.json (store=mcp)")
+    parser.add_argument("--mcp-config", dest="mcp_config", default=os.path.join(".vscode", "mcp.json"), help="path to the MCP config (store=mcp)")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="create a new plan")
