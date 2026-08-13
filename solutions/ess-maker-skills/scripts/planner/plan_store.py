@@ -69,21 +69,35 @@ class LocalPlanStore:
 
 
 class McpPlanStore:
-    """A WeveNova-backed store over the ``weve-plan`` MCP server.
+    """A WeveNova-backed store over the ``weve-plan`` MCP server — the **source
+    of truth** for the plan of the project/agent being configured.
 
-    ``load`` reads the configured project plan (context, outputs, status,
-    acceptance criteria) and its tasks. ``save`` reconciles the plan's tasks to
-    WeveNova (create / update / delete) and re-renders the local ``.md``.
+    WeveNova is authoritative: ``load`` always **fetches** the plan (context,
+    outputs, status, acceptance criteria) and its tasks from WeveNova; ``save``
+    reconciles task changes back to WeveNova and then renders the human
+    ``ESS-scenario-plan.md`` **from the re-fetched WeveNova state**. A local
+    ``plan.json`` is written only as an optional cache/mirror (``cache_path``) —
+    never read as truth.
     """
 
-    def __init__(self, client: McpClient, summary_path: str) -> None:
+    def __init__(self, client: McpClient, summary_path: str, cache_path: str | None = None) -> None:
         self.client = client
         self._summary_path = summary_path
+        self.cache_path = cache_path
         self.warnings: list[str] = []
 
     @property
     def summary_path(self) -> str:
         return self._summary_path
+
+    def _cache(self, plan: Plan) -> None:
+        """Mirror the authoritative WeveNova plan to a local ``plan.json`` cache
+        (best-effort; the cache is never the source of truth)."""
+        if self.cache_path:
+            try:
+                plan.save(self.cache_path)
+            except OSError:
+                pass
 
     # -- read ------------------------------------------------------------- #
 
@@ -99,6 +113,9 @@ class McpPlanStore:
         return [wm.task_from_weve(t) for t in items if isinstance(t, dict)]
 
     def load(self) -> Plan:
+        """Fetch the authoritative plan (+ tasks) from WeveNova and mirror it to
+        the local cache. WeveNova is always the source read here — never the
+        local cache."""
         self.warnings = []
         try:
             doc = self.client.call_tool("get_project_plan", {})
@@ -118,7 +135,9 @@ class McpPlanStore:
                 "Task changes will not persist until the tasks endpoint is reachable."
             )
             tasks = []
-        return Plan(wm.plan_from_weve(doc, tasks=tasks))
+        plan = Plan(wm.plan_from_weve(doc, tasks=tasks))
+        self._cache(plan)
+        return plan
 
     # -- write ------------------------------------------------------------ #
 
@@ -181,8 +200,20 @@ class McpPlanStore:
                 "are owned by WeveNova upstream (no plan-level write over MCP yet)."
             )
 
-        # The human view is always rendered locally, MCP-backed or not.
-        plan.write_summary(self._summary_path)
+        # WeveNova is the source of truth: render the human view (and refresh the
+        # local cache) from the **re-fetched** authoritative plan — so the .md
+        # reflects WeveNova (including any server-assigned task ids), not just the
+        # in-memory copy. Fall back to the in-memory plan if the re-fetch fails.
+        authoritative = plan
+        try:
+            authoritative = self.load()
+            notices.extend(
+                w for w in self.warnings if "unavailable" in w
+            )
+        except PlanStoreError:
+            pass
+        authoritative.write_summary(self._summary_path)
+        self._cache(authoritative)
         return notices
 
 
@@ -192,10 +223,13 @@ def make_store(
     plan_path: str,
     mcp_server: str = "weve-plan",
     mcp_config: str = os.path.join(".vscode", "mcp.json"),
+    mcp_cache: bool = True,
 ) -> PlanStore:
     """Build the requested store. ``backend`` is ``"local"`` (default) or
     ``"mcp"``. For MCP, the endpoint comes from ``.vscode/mcp.json`` (the
-    ``weve-plan`` server) or the ``PLANNER_MCP_URL`` env override."""
+    ``weve-plan`` server) or the ``PLANNER_MCP_URL`` env override; WeveNova is the
+    source of truth and ``plan_path`` is written only as a local cache/mirror
+    (disable with ``mcp_cache=False``)."""
     if backend == "local":
         return LocalPlanStore(plan_path)
     if backend == "mcp":
@@ -203,5 +237,6 @@ def make_store(
             client = client_from_config(mcp_server, mcp_config)
         except McpError as exc:
             raise PlanStoreError(str(exc)) from exc
-        return McpPlanStore(client, _summary_beside(plan_path))
+        cache_path = plan_path if mcp_cache else None
+        return McpPlanStore(client, _summary_beside(plan_path), cache_path=cache_path)
     raise PlanStoreError(f"unknown plan store backend: {backend!r}")

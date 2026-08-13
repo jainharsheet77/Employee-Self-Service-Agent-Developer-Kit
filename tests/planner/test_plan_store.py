@@ -131,6 +131,31 @@ def test_mcp_store_save_skips_unchanged_tasks(tmp_path):
     assert "delete_project_plan_task" not in client.calls
 
 
+def test_mcp_store_load_writes_local_cache(tmp_path):
+    cache = tmp_path / "plan.json"
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    store = McpPlanStore(client, str(tmp_path / "plan.md"), cache_path=str(cache))
+    plan = store.load()
+    assert cache.exists()                                    # WeveNova mirrored to local cache
+    cached = json.loads(cache.read_text(encoding="utf-8"))
+    assert cached["planId"] == plan.data["planId"]
+
+
+def test_mcp_store_save_renders_md_from_weve_state(tmp_path):
+    # After creating a task locally, the .md must reflect the WeveNova state —
+    # i.e. the server-assigned TaskId, not the local placeholder id.
+    md = tmp_path / "plan.md"
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    store = McpPlanStore(client, str(md), cache_path=str(tmp_path / "plan.json"))
+    plan = Plan(wm.plan_from_weve(client.plan_doc, tasks=[]))
+    plan.add_task(new_task("LOCAL-TMP", "Run setup", assigned_to=principal_pool("power-platform-admin")))
+    store.save(plan)
+    server_id = next(iter(client.tasks))                     # uuid the fake assigned
+    rendered = md.read_text(encoding="utf-8")
+    assert server_id in rendered                             # md generated from WeveNova
+    assert "LOCAL-TMP" not in rendered                       # not the local placeholder
+
+
 def test_mcp_store_save_updates_existing_task(tmp_path):
     server_task = wm.task_to_weve(new_task("keep", "Old title",
                                            assigned_to=principal_pool("maker")), include_id=True)

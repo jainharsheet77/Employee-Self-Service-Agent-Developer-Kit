@@ -8,7 +8,10 @@ work, and captures Task outputs (starting with the environment `/setup`
 **connects to** — it records an already-deployed agent/environment, it does not
 create one) so later Tasks read them straight off the Plan.
 
-The Plan lives at `workspace/plan/plan.json`. Its human view —
+The Plan lives at `workspace/plan/plan.json` (local), **or in WeveNova** when the
+plan for the project/agent being configured is backed by the `weve-plan` MCP
+server — pass `--store mcp` (or set `PLANNER_STORE=mcp`) and the CLI reads/writes
+the WeveNova project plan instead of the local file. Either way the human view —
 `workspace/plan/ESS-scenario-plan.md` — is an **editable** surface a Plan editor
 can revise directly (or edit and re-upload); you reconcile their edits back into
 the plan (`src/skills/planner/edit.md`). The CLI regenerates it after every change.
@@ -42,12 +45,31 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
 **Always begin here. Do NOT ask for the objective (or anything else) until you
 have checked for an existing plan.**
 
-1. Check whether a plan already exists at `workspace/plan/plan.json`.
-2. **If a plan exists, resume it — do not re-interview and do not ask for the
-   objective again.**
-   - Show its latest state: `python scripts/planner/cli.py summary` — the
-     objective, every task and its state, scenario dependencies, and what's been
-     produced so far. Present it in plain language.
+**Where the plan lives — check WeveNova first when it's the backend.** If the
+project/agent being configured is backed by WeveNova (the `weve-plan` MCP server
+is configured in `.vscode/mcp.json`, or you're told to use it / `PLANNER_STORE=mcp`
+is set), the authoritative plan is **in WeveNova, not a local file**. In that case
+**fetch it first** — this is the resume for a WeveNova-backed agent:
+
+```
+python scripts/planner/cli.py --store mcp pull
+```
+
+`pull` reads the project's plan (objective/context, tasks, produced outputs,
+status) from WeveNova and writes the local `ESS-scenario-plan.md` view. If it
+returns a plan, **resume it** (below) — do not re-interview. If WeveNova has no
+plan yet for this project, fall through to "start a new one". Run every
+subsequent command with the **same `--store mcp`** so reads and writes stay
+against WeveNova. (If tasks are temporarily unavailable upstream, `pull` still
+shows the plan context/outputs and warns — carry on with what it returned.)
+
+1. If not WeveNova-backed, check whether a plan already exists at
+   `workspace/plan/plan.json`.
+2. **If a plan exists (local file, or fetched from WeveNova), resume it — do not
+   re-interview and do not ask for the objective again.**
+   - Show its latest state: `python scripts/planner/cli.py [--store mcp] summary`
+     — the objective, every task and its state, scenario dependencies, and what's
+     been produced so far. Present it in plain language.
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
      front of you (Flow 2 — read `src/skills/planner/mytasks.md`): the tasks
      assigned to them or open to a role they hold, that aren't already Completed.

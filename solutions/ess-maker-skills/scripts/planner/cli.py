@@ -487,6 +487,31 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pull(args: argparse.Namespace) -> int:
+    """Fetch the plan from the active store and (re)materialize the local
+    ``ESS-scenario-plan.md`` view.
+
+    This is how the planner **resumes a WeveNova-backed plan**: with ``--store
+    mcp`` it reads the configured project plan (context, outputs, status) and its
+    tasks from the ``weve-plan`` MCP server — the plan for the project/agent being
+    configured — and writes the human view locally so the sponsor can read it.
+    Unlike ``summary`` (read-only), ``pull`` deliberately writes the ``.md`` to
+    reflect the freshly fetched upstream state; run it at the start of a resume,
+    before any local edits exist to reconcile."""
+    store = _store(args)
+    from planner.plan_store import PlanStoreError
+
+    try:
+        plan = store.load()
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot fetch the plan: {exc}")
+    for warning in getattr(store, "warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
+    plan.write_summary(store.summary_path)
+    print(plan.render_summary())
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     plan = _load(args)
     errors = plan.validate()
@@ -638,6 +663,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("summary", help="render the plan's Markdown view (ESS-scenario-plan.md) and print it")
     p.set_defaults(func=cmd_summary)
+
+    p = sub.add_parser("pull", help="fetch the plan from the active store (WeveNova MCP with --store mcp) and write the local .md view")
+    p.set_defaults(func=cmd_pull)
 
     p = sub.add_parser("validate", help="validate the plan")
     p.set_defaults(func=cmd_validate)
