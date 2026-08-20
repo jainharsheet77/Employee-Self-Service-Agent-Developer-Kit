@@ -183,9 +183,15 @@ their pooled tasks. So:
   yours alone; a non-self OID is treated as a literal filter and will not expand
   that person's role-pooled tasks.
 - A plain task list (no caller) returns **all** tasks on the plan — the "my tasks"
-  scoping only happens with this caller marker, never implicitly.
+  scoping only happens with this caller marker, never implicitly. So **never**
+  answer "what am I assigned?" from an unscoped plan pull, and never filter the plan
+  client-side to guess what's theirs — `caller-tasks` is the one authoritative call.
 
 Present the result in plain language — the tasks waiting on them, grouped sensibly.
+**`caller-tasks` output is the whole answer:** if it returns nothing, say plainly
+that nothing is assigned to them and stop — do **not** enumerate the plan's other
+tasks or who they're waiting on. Offer instead to attest them to a role (so the
+matching tasks become theirs) or to walk a task they name.
 
 > **Offline fallback:** when there is no WeveNova plan wired, the planner's local
 > equivalent is `python scripts/planner/cli.py mine --person <oid> --roles

@@ -6,17 +6,35 @@ WeveNova you never resolve those roles yourself: pass the person's own id and th
 server expands their attested roles. Grouping the result by role is a *display*
 choice, not a reason to query role-by-role.
 
+**The answer is *exactly* what the caller-scoped WeveNova call returns — nothing
+more.** "What am I assigned?" is a **filtered, self-scoped** query, not a plan tour:
+
+- The task list you show is **only** the output of `caller-tasks` (step 1). Never
+  substitute, pad, or supplement it with the wider plan.
+- **Never enumerate the whole plan's tasks**, and never show a task that is waiting
+  on a role the caller does **not** hold. "Here's everything in the plan and who
+  it's waiting on" is the **wrong** answer to "what am I assigned?".
+- **Never filter the plan client-side** to decide what's theirs — WeveNova scopes
+  it server-side from the caller's id. Pulling the plan and picking out rows
+  yourself is exactly the bug this flow exists to prevent.
+- If nothing is scoped to them, say so plainly and **stop there** (then offer the
+  next actions in step 1) — do **not** fall back to dumping the plan.
+
 ## Steps
 
-**0. Fetch the live plan from WeveNova first.** "What am I assigned?" is a read of
-the *live* plan, so before anything else pull it — **even if you routed straight
-here** and think no backend is configured:
+**0. Confirm a plan exists on WeveNova — for context only, not to list tasks.**
+Pull the live plan first so you can tell "no plan authored yet" apart from "a plan
+exists but nothing is scoped to you" — **even if you routed straight here** and
+think no backend is configured:
 
 ```
 python scripts/planner/cli.py --store mcp pull
 ```
 
-- Returns a plan → continue to step 1 (show their tasks).
+- Returns a plan → a plan exists; go to step 1 for the **scoped** answer. The
+  pulled plan is **background context only** — it is **not** the task list, and its
+  tasks must **never** be read out as "your tasks" (that dump is the exact mistake
+  this flow exists to prevent).
 - Returns an **empty plan / "no plans yet"** → there genuinely are no assignments
   because no plan has been authored yet; say so and offer to **build** one (hand
   back to the planner's plan-creation flow). Do **not** claim "no plan exists"
@@ -25,7 +43,8 @@ python scripts/planner/cli.py --store mcp pull
   path in step 1 (`mine --person … --roles …`, where you supply the roles
   manually because there's no server to resolve them).
 
-**Never answer "nothing is assigned / no plan exists" until this pull has run.**
+**Never answer "nothing is assigned / no plan exists" until this pull has run** —
+and never answer with the *whole* plan once it has.
 
 1. **Show the tasks waiting on them — let WeveNova resolve the roles.** Against
    WeveNova (`--store mcp`, the default backend) this is owned by the **`/roles`
@@ -46,6 +65,17 @@ python scripts/planner/cli.py --store mcp pull
    always *your own* authenticated identity — a different, hand-supplied OID is
    read as a literal filter and returns none of that person's role-pooled work.
    See `src/skills/roles/SKILL.md`.)
+
+   **`caller-tasks` output *is* the answer — present it and stop:**
+   - **It returned tasks** → show **those**, grouped by role for readability. Don't
+     add sibling tasks from the plan "for context."
+   - **It returned "No tasks are waiting on you right now"** (the plan exists — step
+     0 pulled it — but nothing is scoped to this caller) → say exactly that: nothing
+     is assigned to them yet. **Do not** then list the plan's other tasks or who
+     they're waiting on. Instead offer the useful next moves: **assign them to a
+     role** so the matching tasks become theirs (hand to `/roles` attest), or
+     **walk them through a specific task** if they name one. Let *them* ask to see
+     the wider plan — never volunteer it as their task list.
 
    > **Offline fallback only** — when step 0 reported WeveNova
    > unreachable/unconfigured (no live plan), the local equivalent is:
