@@ -53,54 +53,33 @@ or casing variant like *"Workday Administrator"* maps to `WorkdayAdmin`); if it
 isn't a valid **attestable** role, surface the "must be one of …" list rather than
 guessing.
 
-## Resolve a person by name — WeveNova people directory (name → Entra object id)
+## Resolve the current user
 
-Attestation needs the person's **Entra object id (OID)** — a GUID, not a name. The
-**WeveNova people directory** (the same `weve-plan` MCP the plan lives on) resolves
-it, so there is **no separate sign-in**: it is the backend the plan already uses.
-Use it whenever the maker names a person and you need that person's id to attest —
-e.g. *"assign the Power Platform role to `primary`"*:
+Use the authenticated WeveNova/TDS identity for role and caller-scoped operations:
 
 ```
-python scripts/planner/roles_cli.py find-users --name "primary"
+python scripts/planner/roles_cli.py current-user
 ```
 
-Each match prints `displayName  <aadId>`. The `aadId` **is** the Entra object id
-`attest --person` wants, so *"assign the Power Platform role to primary"* becomes a
-two-step lookup-then-attest:
+It prints `displayName <aadId>`. The current no-auth tunnel identity is `default`.
+Use that `aadId` for attestation and caller-task filtering:
 
 ```
-python scripts/planner/roles_cli.py find-users --name "primary"      # -> aadId
+python scripts/planner/roles_cli.py current-user                     # -> aadId
 python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
 ```
 
-- **Always confirm the match** (name + id) with the maker before attesting — a
-  partial name can hit more than one person; present the candidates and let them
-  pick, never auto-attest the first hit.
-- If `find-users` prints a **warning** that it fell back to the *demo cache* (the
-  live WeveNova directory was briefly unavailable), say so and have the maker
-  confirm the person before you attest — don't treat a cache hit as authoritative.
-- **Confirm an id you were handed.** If the maker gives an OID directly (or you
-  want to double-check a match), the directory resolves an id back to a name —
-  `get_user_by_aad_id` (aadId → displayName) — so read the name back to them
-  before attesting. `list_cached_users` dumps everyone the directory has seen this
-  session (name ↔ aadId) if you need to reconcile a partial match.
-- **If the directory can't resolve the name** (no match, or `find-users` only
-  returns a demo-cache hit the maker won't confirm), never fabricate an id: ask the
-  maker for the person's object id directly, or **leave the task open to the role**
-  (a pool any holder can later claim) and attest later.
-- The id is **authoring-time only** — it wires the plan; it is never a runtime
-  dependency of the deployed ESS agent.
+- Do not look up or attest another named user through this demo surface.
+- Never fabricate or substitute an AAD ID.
+- The ID is authoring-time only; it is not a deployed-agent runtime dependency.
 
 ## Discover who holds a role — reverse lookup ("who is the Power Platform Admin?")
 
 **WeveNova cannot enumerate role holders — by design it *attests, it does not
 discover*.** It validates a role id, point-checks whether a *given* subject holds a
-role, stores an attestation once a human names the person, and can list the
+role, stores an attestation for the current user, and can list the
 attestations **already recorded on this plan**. It has **no tenant-wide "who holds
-role R" query** and **no directory-role membership lookup** — and the people
-directory (`find_users_by_name`) searches **by name, not by role**. So there are
-exactly two things you can answer, and one you must hand back to the maker:
+role R" query** and **no directory-role membership lookup**.
 
 1. **Who is attested for this role *on this plan*** — the plan roster. This is the
    only "who holds role R" WeveNova can answer, and only among people already
@@ -108,10 +87,9 @@ exactly two things you can answer, and one you must hand back to the maker:
    ```
    python scripts/planner/roles_cli.py assignments --role "Power Platform Administrator"
    ```
-2. **Turn a name the maker gives into an attestation** — resolve → confirm →
-   attest:
+2. **Attest the current user**:
    ```
-   python scripts/planner/roles_cli.py find-users --name "<name>"   # -> aadId
+   python scripts/planner/roles_cli.py current-user                 # -> aadId
    python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
    ```
 3. **Tenant-wide discovery ("find me the admins") is not available.** There is no
@@ -123,7 +101,7 @@ exactly two things you can answer, and one you must hand back to the maker:
 **The flow** — turn "who is the Power Platform Admin?" into a recorded assignment:
 
 ```
-maker names the person ─► find-users (name → aadId) ─► confirm the match
+current-user ─► authenticated aadId
                                   │
                                   ▼
                      attest  (persist person ↔ role ↔ this plan)
@@ -131,15 +109,9 @@ maker names the person ─► find-users (name → aadId) ─► confirm the mat
               later: they log in ─► WeveNova returns their role-pooled tasks
 ```
 
-Always **present the candidates and let the maker choose** — never auto-attest the
-first hit. If no one can be named, **leave the task pooled on the role** to claim
-later.
+## Attest the current user to a role
 
-## Attest a person to a role — "assign `<role>` to `<name>`"
-
-The end-to-end for *"assign WorkdayAdmin to Alopez"*:
-
-1. Resolve **Alopez → OID** (via `find-users`); confirm the match.
+1. Resolve the authenticated caller with `current-user`.
 2. Attest:
 
    ```
@@ -171,8 +143,7 @@ python scripts/planner/roles_cli.py revoke --assignment <assignmentId>
 Present the roster as role → person lines, not raw output.
 
 > This is the **plan roster** — only people already **attested** on this plan, not a
-> tenant-wide search. To bring in someone not yet attested, have the maker name
-> them, resolve with `find-users`, then attest (see reverse-lookup above).
+> tenant-wide search.
 
 ## Flow 2 — "what am I assigned?"
 
@@ -182,7 +153,7 @@ their own OID; there is **no role API to enumerate**, so never look up or resolv
 their roles client-side to build the query:
 
 ```
-python scripts/planner/roles_cli.py caller-tasks --caller <your-own-oid>
+python scripts/planner/roles_cli.py caller-tasks
 ```
 
 **This is self-only.** The caller id must be the **authenticated** identity — the
@@ -191,15 +162,12 @@ OID `list_project_plan_tasks_for_caller` sees upstream. WeveNova treats `callerI
 as a *self-scope marker* and only then expands the roles **that caller** holds into
 their pooled tasks. So:
 
-- WeveNova has **no "who am I" lookup**, so get the caller's **own** OID by
-  resolving their name with `find-users` (confirm the match is really them), by
-  asking them for their object id, or by setting it once as `PLANNER_MCP_CALLER_ID`
-  and omitting `--caller`.
+- `caller-tasks` resolves the caller automatically through
+  `get_current_user_context`; `--caller` and `PLANNER_MCP_CALLER_ID` remain explicit
+  overrides.
 - Do **not** pass a *different* person's OID to see their work — the self-scope is
-  yours alone. A `find-users` result for someone else (e.g. "primary") is for
-  `attest`, **not** as the caller here: WeveNova reads a non-self OID as a plain
-  literal filter and returns none of their role-pooled tasks, so it can't answer
-  "what is *that person* assigned?".
+  yours alone; a non-self OID is treated as a literal filter and will not expand
+  that person's role-pooled tasks.
 - A plain task list (no caller) returns **all** tasks on the plan — the "my tasks"
   scoping only happens with this caller marker, never implicitly.
 

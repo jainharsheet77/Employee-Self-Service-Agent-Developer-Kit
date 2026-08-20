@@ -17,9 +17,9 @@ proceed. Listing the valid roles and resolving a person's directory id work with
 no setup at all; the attestation *write* needs the plan backend reachable and
 will say so if it isn't.
 
-If the user says **"assign `<role>` to `<name>`"** (e.g. *"assign WorkdayAdmin to
-Alopez"*): resolve `<name>` to their Entra object id via the WeveNova people
-directory (`find-users`), confirm the match, then attest. If the user asks
+Resolve the authenticated caller with `roles_cli.py current-user`, then use that
+AAD object id for attestation and caller-scoped tasks. The current demo identity
+is `default`; do not resolve or substitute another named user. If the user asks
 **"what am I assigned?"** go to Flow 2.
 
 Rules:

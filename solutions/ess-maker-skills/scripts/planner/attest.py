@@ -244,9 +244,9 @@ class AttestationClient:
         ``$filter=assignedToId eq '<callerId>'`` marker the server intercepts):
         it strips that predicate and expands the caller's attested roles into
         their pooled tasks. This is **self-only** — passing a *different* person's
-        OID (e.g. someone resolved via ``find-users``) is treated as an ordinary
-        literal filter and returns **none** of the role-pooled work, so it must
-        not be used to answer "what is *that* person assigned?".
+        OID (any OID other than the authenticated caller's own) is treated as an
+        ordinary literal filter and returns **none** of the role-pooled work, so
+        it must not be used to answer "what is *that* person assigned?".
 
         A plain ``list_project_plan_tasks`` (no ``callerId``) returns *all* tasks
         on the plan — role scoping is opt-in via this sentinel, never implicit.

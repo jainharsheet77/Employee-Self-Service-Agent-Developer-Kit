@@ -32,19 +32,20 @@ python scripts/planner/cli.py --store mcp pull
    skill**; hand off to its `caller-tasks`:
 
    ```
-   python scripts/planner/roles_cli.py caller-tasks --caller <their-own-oid>
+   python scripts/planner/roles_cli.py caller-tasks
    ```
 
-   You need **only the caller's own OID** — the authenticated, tunnel-signed-in
-   person (or `PLANNER_MCP_CALLER_ID`). **Do not look up, ask for, or infer their
-   roles** — there is no client-side role API, and you never enumerate roles to
-   build the query. Passing the caller id *is* the whole mechanism: WeveNova reads
-   it as a self-scope marker, expands the roles that caller is attested to
-   **server-side**, and returns their directly-assigned tasks **plus** the pooled
-   tasks for those roles. (Self-only: a *different* person's OID — or a
-   `find-users` result for someone else, e.g. "primary" — returns none of their
-   pooled work; that lookup is for `attest`, not as the caller. See
-   `src/skills/roles/SKILL.md`.)
+   `caller-tasks` resolves the caller **automatically** via WeveNova's
+   `get_current_user_context` — so **don't ask the person for their AAD id** (or
+   look up a name). `--caller` / `PLANNER_MCP_CALLER_ID` are optional overrides.
+   **Don't look up or infer their roles either** — there is no client-side role
+   API, and you never enumerate roles to build the query. Passing the caller id
+   *is* the whole mechanism: WeveNova reads it as a self-scope marker, expands the
+   roles that caller is attested to **server-side**, and returns their directly-
+   assigned tasks **plus** the pooled tasks for those roles. (Self-only: it is
+   always *your own* authenticated identity — a different, hand-supplied OID is
+   read as a literal filter and returns none of that person's role-pooled work.
+   See `src/skills/roles/SKILL.md`.)
 
    > **Offline fallback only** — when step 0 reported WeveNova
    > unreachable/unconfigured (no live plan), the local equivalent is:
@@ -52,9 +53,8 @@ python scripts/planner/cli.py --store mcp pull
    > python scripts/planner/cli.py mine --person <oid> --roles <role,…>
    > ```
    > Here — and *only* here — you supply the roles manually, because there's no
-   > server to resolve them: ask the person which of the plan's roles are theirs
-   > (or resolve their identity with `find-users`). Never do this against a live
-   > WeveNova plan — let the server expand roles.
+   > server to resolve them: ask the person which of the plan's roles are theirs.
+   > Never do this against a live WeveNova plan — let the server expand roles.
 
 2. **Claiming a pooled Task.** If they take a pooled Task, record them as the
    owner (the role is retained):
