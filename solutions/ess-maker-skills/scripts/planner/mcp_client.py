@@ -187,6 +187,21 @@ def client_from_config(
     return McpClient(server["url"], server.get("headers"), timeout=timeout)
 
 
+def _ping_project_plan(client: McpClient) -> str:
+    """Resolve the WeveNova project/plan binding, then read the plan back — the
+    ``get_project_plan`` tool requires ``{"projectId","planId"}`` (the 3.x surface
+    rejects an empty ``{}``), so ``--ping`` must discover the ids the same way the
+    store does rather than calling the tool with no arguments. ``resolve_plan_binding``
+    is imported lazily because ``planner.plan_store`` imports this module at import
+    time — a top-level import here would be a cycle."""
+    from planner.plan_store import resolve_plan_binding
+
+    project_id, plan_id, _tenant = resolve_plan_binding(client)
+    plan = client.call_tool("get_project_plan", {"projectId": project_id, "planId": plan_id})
+    keys = list(plan.keys()) if isinstance(plan, dict) else type(plan).__name__
+    return f"get_project_plan OK (project {project_id}, plan {plan_id}) — keys: {keys}"
+
+
 def main(argv: list[str] | None = None) -> int:
     """`python -m planner.mcp_client --ping` — verify connectivity + list tools."""
     import argparse
@@ -194,7 +209,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Ping the planner's WeveNova MCP server.")
     parser.add_argument("--server", default=DEFAULT_SERVER_NAME)
     parser.add_argument("--config", default=DEFAULT_MCP_CONFIG)
-    parser.add_argument("--ping", action="store_true", help="initialize + list tools + try get_project_plan")
+    parser.add_argument(
+        "--ping",
+        action="store_true",
+        help="initialize + list tools + read get_project_plan (auto-resolves projectId/planId)",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -205,10 +224,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"tools ({len(tools)}): " + ", ".join(t.get("name", "") for t in tools))
         if args.ping:
             try:
-                plan = client.call_tool("get_project_plan", {})
-                keys = list(plan.keys()) if isinstance(plan, dict) else type(plan).__name__
-                print(f"get_project_plan OK — keys: {keys}")
-            except McpError as exc:
+                print(_ping_project_plan(client))
+            except Exception as exc:  # McpError, or a PlanStoreError from binding
                 print(f"get_project_plan unavailable: {exc}")
         return 0
     except McpError as exc:

@@ -20,12 +20,33 @@ import pytest
 from planner import weve_mapping as wm
 from planner.mcp_client import McpError
 from planner.plan_model import Plan, new_task, principal_pool
-from planner.plan_store import LocalPlanStore, McpPlanStore, make_store
+from planner.plan_store import (
+    LocalPlanStore,
+    McpPlanStore,
+    PlanStoreError,
+    create_project_plan,
+    find_existing_plan_id,
+    make_store,
+    open_or_create_mcp_plan,
+    resolve_plan_binding,
+    resolve_project_binding,
+)
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "weve_project_plan.json")
 
 PID = "proj-test-1"
 PLID = "plan-test-1"
+
+
+@pytest.fixture(autouse=True)
+def _clear_planner_env(monkeypatch):
+    """Keep discovery hermetic: a contributor's real ``PLANNER_MCP_*`` env must
+    not steer the project/plan binding the resolution tests assert on."""
+    for var in (
+        "PLANNER_MCP_PROJECT_ID", "PLANNER_MCP_PLAN_ID", "PLANNER_MCP_TENANT_ID",
+        "PLANNER_MCP_URL", "PLANNER_MCP_HEADERS", "PLANNER_STORE",
+    ):
+        monkeypatch.delenv(var, raising=False)
 
 
 class FakeWeveClient:
@@ -36,10 +57,18 @@ class FakeWeveClient:
     create and dedicated state-transition tools.
     """
 
-    def __init__(self, plan_doc: dict, tasks: list[dict] | None = None) -> None:
+    def __init__(self, plan_doc: dict, tasks: list[dict] | None = None, *,
+                 projects: list[dict] | None = None, plans: list[dict] | None = None) -> None:
         self.plan_doc = plan_doc
         self.tasks: dict[str, dict] = {}
         self._etag_seq = 0
+        # Optional multi-plan discovery surface. When left as None the fake
+        # synthesizes a single project/plan from ``plan_doc`` so the existing
+        # task-focused tests keep working unchanged; the plan-lifecycle tests
+        # pass explicit lists (e.g. a project with no plan yet).
+        self.projects = projects
+        self.plans = plans
+        self.created_plan_args: dict | None = None
         for t in tasks or []:
             tid = t.get("TaskId") or str(uuid.uuid4())
             self.tasks[tid] = {**t, "TaskId": tid, "ETag": self._bump_etag()}
@@ -55,6 +84,41 @@ class FakeWeveClient:
         self.calls.append(name)
         self.call_log.append((name, arguments))
         if name == "get_project_plan":
+            return self.plan_doc
+        if name == "list_agent_configuration_projects":
+            return {"value": self._projects()}
+        if name == "get_agent_configuration_project":
+            pid = arguments.get("projectId")
+            for p in self._projects():
+                if p.get("ProjectId") == pid:
+                    return p
+            projects = self._projects()
+            return projects[0] if projects else {}
+        if name == "list_project_plans":
+            return {"value": self._plans()}
+        if name == "create_project_plan":
+            self.created_plan_args = arguments
+            new_id = str(uuid.uuid4())
+            plan_body = arguments.get("plan", {}) or {}
+            self.plan_doc = {
+                "PlanId": new_id,
+                "ProjectId": arguments.get("projectId"),
+                "Status": "Draft",
+                "ETag": self._bump_etag(),
+                "Context": list(plan_body.get("Context", []) or []),
+                "AcceptanceCriteria": list(plan_body.get("AcceptanceCriteria", []) or []),
+                "Outputs": [],
+            }
+            self.plans = [{"PlanId": new_id}]
+            return {"PlanId": new_id}
+        if name == "update_project_plan":
+            self._check_plan_etag(arguments)
+            patch = arguments.get("patch", {}) or {}
+            if "Context" in patch:
+                self.plan_doc["Context"] = patch["Context"]
+            if "AcceptanceCriteria" in patch:
+                self.plan_doc["AcceptanceCriteria"] = patch["AcceptanceCriteria"]
+            self.plan_doc["ETag"] = self._bump_etag()
             return self.plan_doc
         if name == "list_project_plan_tasks":
             return {"value": list(self.tasks.values())}
@@ -110,6 +174,30 @@ class FakeWeveClient:
         current = self.tasks.get(tid, {}).get("ETag")
         if current and arguments.get("etag") != current:
             raise McpError(f"precondition failed: stale ETag for {tid}")
+
+    def _check_plan_etag(self, arguments: dict) -> None:
+        """Model If-Match on the plan itself for ``update_project_plan``."""
+        current = self.plan_doc.get("ETag")
+        if current and arguments.get("etag") != current:
+            raise McpError("precondition failed: stale plan ETag")
+
+    def _projects(self) -> list[dict]:
+        """The discovery project list — explicit when provided, else a single
+        project synthesized from ``plan_doc`` (its plan is the active plan)."""
+        if self.projects is not None:
+            return self.projects
+        return [{
+            "ProjectId": self.plan_doc.get("ProjectId"),
+            "Name": "Test Project",
+            "ActivePlanId": self.plan_doc.get("PlanId"),
+            "TenantId": "tenant-1",
+        }]
+
+    def _plans(self) -> list[dict]:
+        if self.plans is not None:
+            return self.plans
+        pid = self.plan_doc.get("PlanId")
+        return [{"PlanId": pid}] if pid else []
 
 
 def _mcp_store(client, summary_path, **kw):
@@ -319,6 +407,155 @@ def test_mcp_store_load_raises_when_plan_unreadable(tmp_path):
     store = _mcp_store(PlanDown(), str(tmp_path / "plan.md"))
     with pytest.raises(PlanStoreError):
         store.load()
+
+
+# --- mcp store: project/plan resolution + first-plan create (Bug 1) --------- #
+
+def test_resolve_project_binding_single_project():
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    pid, project, tenant = resolve_project_binding(client)
+    assert pid == _fixture_doc()["ProjectId"]
+    assert tenant == "tenant-1"
+    assert "list_agent_configuration_projects" in client.calls
+
+
+def test_resolve_project_binding_multiple_requires_choice():
+    client = FakeWeveClient(_fixture_doc(), tasks=[], projects=[
+        {"ProjectId": "p1", "Name": "One"}, {"ProjectId": "p2", "Name": "Two"},
+    ])
+    with pytest.raises(PlanStoreError):
+        resolve_project_binding(client)
+
+
+def test_find_existing_plan_id_active_then_single_then_none():
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    # ActivePlanId wins with no extra lookup.
+    assert find_existing_plan_id(
+        client, project_id="p", project={"ActivePlanId": "pl-active"}
+    ) == "pl-active"
+    # No active -> the project's single plan.
+    client.plans = [{"PlanId": "only-plan"}]
+    assert find_existing_plan_id(client, project_id="p", project={}) == "only-plan"
+    # No plans at all -> None (the signal that init should create the first plan).
+    client.plans = []
+    assert find_existing_plan_id(client, project_id="p", project={}) is None
+
+
+def test_find_existing_plan_id_multiple_without_active_raises():
+    client = FakeWeveClient(_fixture_doc(), tasks=[], plans=[{"PlanId": "a"}, {"PlanId": "b"}])
+    with pytest.raises(PlanStoreError):
+        find_existing_plan_id(client, project_id="p", project={})
+
+
+def test_create_project_plan_returns_id_and_sends_project():
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    plan_id = create_project_plan(client, project_id="proj-9", objective="Deploy ESS in Bangalore")
+    assert plan_id                                          # a PlanId came back
+    assert client.created_plan_args["projectId"] == "proj-9"
+    # The live tool requires a `plan` entity body (not a bare `objective` scalar);
+    # the objective is seeded as an `objective` Context entry so it round-trips.
+    plan_body = client.created_plan_args["plan"]
+    objective_entries = [c for c in plan_body["Context"] if c.get("Key") == "objective"]
+    assert objective_entries and objective_entries[0]["Value"] == "Deploy ESS in Bangalore"
+
+
+def test_create_project_plan_seeds_no_context_without_objective():
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    create_project_plan(client, project_id="proj-9")
+    # No objective -> an empty plan entity body (still a valid `plan` object).
+    assert client.created_plan_args["plan"] == {}
+
+
+def test_resolve_plan_binding_raises_when_no_plans():
+    # A project that exists but has no plan yet -> the classic init catch-22 that
+    # open_or_create_mcp_plan exists to break.
+    client = FakeWeveClient(_fixture_doc(), tasks=[],
+                            projects=[{"ProjectId": "p", "Name": "Fresh"}], plans=[])
+    with pytest.raises(PlanStoreError) as ei:
+        resolve_plan_binding(client)
+    assert "no plans" in str(ei.value)
+
+
+def _use_fake_client(monkeypatch, client):
+    """Make make_store / open_or_create_mcp_plan use the in-memory fake."""
+    import planner.plan_store as ps
+    monkeypatch.setattr(ps, "client_from_config", lambda *a, **k: client)
+
+
+def test_open_or_create_mcp_plan_creates_first_plan(monkeypatch, tmp_path):
+    # Fresh project: it exists, but has no plan yet.
+    client = FakeWeveClient(_fixture_doc(), tasks=[],
+                            projects=[{"ProjectId": "proj-1", "Name": "Fresh"}], plans=[])
+    _use_fake_client(monkeypatch, client)
+    store, created = open_or_create_mcp_plan(
+        plan_path=str(tmp_path / "plan.json"), objective="Deploy ESS in Bangalore",
+    )
+    assert created is True
+    assert isinstance(store, McpPlanStore)
+    assert client.created_plan_args["projectId"] == "proj-1"
+    assert store.plan_id                                    # bound to the newly created plan
+    assert "create_project_plan" in client.calls
+
+
+def test_open_or_create_mcp_plan_reuses_existing_plan(monkeypatch, tmp_path):
+    client = FakeWeveClient(_fixture_doc(), tasks=[])       # synthesized active plan
+    _use_fake_client(monkeypatch, client)
+    store, created = open_or_create_mcp_plan(plan_path=str(tmp_path / "plan.json"))
+    assert created is False
+    assert store.plan_id == _fixture_doc()["PlanId"]
+    assert "create_project_plan" not in client.calls        # never recreates an existing plan
+
+
+# --- mcp store: plan-level context reconcile (read-write, Bug 3) ------------ #
+
+def test_mcp_store_save_pushes_context_and_criteria(tmp_path):
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    store = _mcp_store(client, str(tmp_path / "plan.md"))
+    plan = store.load()
+    plan.set_context("market", "IN", group="market")        # change existing context
+    plan.set_context("acceptanceCriteria:Latency < 2s", "Latency < 2s",
+                     group="acceptanceCriteria")            # add a new acceptance criterion
+    client.calls.clear()
+    store.save(plan)
+    assert "update_project_plan" in client.calls            # plan-level write happened
+    patches = [a for (n, a) in client.call_log if n == "update_project_plan"]
+    assert patches and patches[0].get("etag")               # carried the plan ETag as If-Match
+    pushed = patches[0]["patch"]
+    assert any(c["Key"] == "market" and c["Value"] == "IN" for c in pushed["Context"])
+    assert "Latency < 2s" in pushed["AcceptanceCriteria"]
+    # Acceptance criteria travel in their own list, never duplicated into Context.
+    assert all(c.get("Group") != "acceptanceCriteria" for c in pushed["Context"])
+
+
+def test_mcp_store_save_skips_plan_write_when_context_unchanged(tmp_path):
+    client = FakeWeveClient(_fixture_doc(), tasks=[])
+    store = _mcp_store(client, str(tmp_path / "plan.md"))
+    plan = store.load()
+    client.calls.clear()
+    store.save(plan)                                         # nothing changed
+    assert "update_project_plan" not in client.calls        # no no-op plan write
+
+
+def test_mcp_store_save_plan_context_degrades_on_read_failure(tmp_path):
+    # If the plan can't be re-read to diff, plan-context sync degrades to a
+    # notice rather than raising (task reconcile already succeeded).
+    server_task = wm.task_to_weve(
+        new_task("keep", "Same", assigned_to=principal_pool("WorkdayAdmin")), include_id=True)
+    client = FakeWeveClient(_fixture_doc(), tasks=[server_task])
+    store = _mcp_store(client, str(tmp_path / "plan.md"))
+    plan = store.load()
+    plan.set_context("market", "IN", group="market")
+
+    real_call = client.call_tool
+
+    def flaky(name, arguments=None):
+        if name == "get_project_plan":
+            raise McpError("Upstream GET plan returned 503")
+        return real_call(name, arguments)
+
+    client.call_tool = flaky
+    notices = store.save(plan)
+    assert any("plan context not synced" in n for n in notices)
 
 
 # --- opt-in live smoke ------------------------------------------------------- #

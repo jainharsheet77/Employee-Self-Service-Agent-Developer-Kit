@@ -252,3 +252,26 @@ def acceptance_criteria_from_plan(plan_data: dict[str, Any]) -> list[str]:
         for e in plan_data.get("context", [])
         if e.get("group") == ACCEPTANCE_GROUP and e.get("value")
     ]
+
+
+def plan_fields_to_weve(plan_data: dict[str, Any]) -> dict[str, Any]:
+    """The **writable plan-level projection** pushed back to WeveNova via the
+    ``update_project_plan`` tool: the ``Context`` bag (PascalCase) **minus** the
+    acceptance-criteria entries, which travel in their own ``AcceptanceCriteria``
+    string list (they are folded *into* context on read by :func:`plan_from_weve`,
+    so they must be split back *out* on write to avoid duplicating them).
+
+    Outputs are intentionally excluded — WeveNova records those when a task
+    completes, not through a plan-level context write. The inverse of the
+    ``Context``/``AcceptanceCriteria`` halves of :func:`plan_from_weve`, so a
+    plan read then written unchanged round-trips to an equal projection (used to
+    skip no-op ``update_project_plan`` calls)."""
+    context = [
+        context_to_weve(e)
+        for e in plan_data.get("context", [])
+        if e.get("group") != ACCEPTANCE_GROUP
+    ]
+    return {
+        "Context": context,
+        "AcceptanceCriteria": acceptance_criteria_from_plan(plan_data),
+    }

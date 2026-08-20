@@ -104,6 +104,29 @@ def test_context_round_trip():
     assert back["provenance"]["source"] == "User"
 
 
+def test_plan_fields_to_weve_splits_context_and_criteria():
+    doc = _load_fixture()
+    data = wm.plan_from_weve(doc, tasks=[])
+    fields = wm.plan_fields_to_weve(data)
+    # Context is the PascalCase bag MINUS the acceptance-criteria entries...
+    keys = {c["Key"] for c in fields["Context"]}
+    assert {"scenario", "system", "market"} <= keys
+    assert all(c.get("Group") != wm.ACCEPTANCE_GROUP for c in fields["Context"])
+    # ...and the criteria travel in their own string list (folded in on read).
+    assert "HR knowledge grounded in Workday" in fields["AcceptanceCriteria"]
+    assert "Eval pass-rate >= 90%" in fields["AcceptanceCriteria"]
+    # Outputs are intentionally excluded from the writable plan-level projection.
+    assert "Outputs" not in fields
+
+
+def test_plan_fields_to_weve_round_trips_unchanged():
+    # A plan read then projected back must equal the projection of that same plan
+    # re-read — this is what lets the store skip a no-op update_project_plan.
+    doc = _load_fixture()
+    data = wm.plan_from_weve(doc, tasks=[])
+    assert wm.plan_fields_to_weve(data) == wm.plan_fields_to_weve(wm.plan_from_weve(doc, tasks=[]))
+
+
 def test_task_from_weve_maps_real_task_fixture():
     with open(os.path.join(os.path.dirname(__file__), "fixtures", "weve_project_plan_task.json"), "r", encoding="utf-8") as fh:
         t = json.load(fh)

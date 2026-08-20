@@ -131,11 +131,39 @@ def _save(plan: Plan, args: argparse.Namespace) -> None:
 def cmd_init(args: argparse.Namespace) -> int:
     backend = getattr(args, "store", None) or os.environ.get("PLANNER_STORE", "local")
     if backend == "mcp":
-        # The WeveNova project plan is owned upstream — never create/overwrite it
-        # (a blind reconcile would delete its tasks). Load it and render the view.
-        plan = _load(args)
-        plan.write_summary(_store(args).summary_path)
-        print("Using the existing WeveNova project plan (owned upstream); rendered the plan view.")
+        # ``init`` is the one command allowed to create the *first* WeveNova plan
+        # for a project that has none yet (a brand-new project, or one whose only
+        # plan is archived so discovery finds none). An existing plan is reused
+        # untouched — never recreated, since a blind reconcile would drop its
+        # tasks. Binding the plan up front the way the other commands do can't do
+        # this (it errors when no plan exists), so use the project-first
+        # open-or-create seam.
+        from planner.plan_store import PlanStoreError, open_or_create_mcp_plan
+
+        try:
+            store, created = open_or_create_mcp_plan(
+                plan_path=args.plan,
+                mcp_server=getattr(args, "mcp_server", "weve-plan"),
+                mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+                project_id=getattr(args, "project_id", None),
+                plan_id=getattr(args, "plan_id", None),
+                objective=getattr(args, "objective", None),
+            )
+            plan = store.load()
+        except PlanStoreError as exc:
+            raise SystemExit(f"plan store error: {exc}")
+        for warning in getattr(store, "warnings", []):
+            print(f"warning: {warning}", file=sys.stderr)
+        plan.write_summary(store.summary_path)
+        if created:
+            print(
+                f"Created a new WeveNova project plan ({store.plan_id}); rendered the plan view."
+            )
+        else:
+            print(
+                f"Using the existing WeveNova project plan ({store.plan_id}, owned upstream); "
+                "rendered the plan view."
+            )
         return 0
     if os.path.exists(args.plan) and not args.force:
         print(f"A plan already exists at {args.plan}. Use --force to overwrite.", file=sys.stderr)
@@ -530,6 +558,75 @@ def cmd_pull(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_push(args: argparse.Namespace) -> int:
+    """Push the **whole local plan** to WeveNova in one pass — the bulk
+    counterpart to ``pull``. Reads ``plan.json`` once, opens (or creates) the
+    project's WeveNova plan, and reconciles the entire plan up at once: every
+    plan-level Context + AcceptanceCriteria entry travels in a **single**
+    ``update_project_plan`` write (not one round-trip per field), alongside the
+    tasks. Author locally — cheap file writes — then ``push`` once, instead of
+    editing straight against ``--store mcp`` where each ``set-context`` is its own
+    server round-trip (the wasteful ``W/"5"`` -> ``W/"6"`` etag churn).
+
+    Guards: reusing a project's **existing** plan needs ``--force`` because the
+    reconcile deletes upstream tasks absent locally (a blind push could drop a
+    second maker's tasks — ``pull`` first to merge). Creating the project's first
+    plan needs no flag."""
+    from planner.plan_store import (
+        LocalPlanStore,
+        PlanStoreError,
+        open_or_create_mcp_plan,
+    )
+
+    if not os.path.exists(args.plan):
+        raise SystemExit(f"no local plan at {args.plan} to push — run `init` first.")
+    local_plan = LocalPlanStore(args.plan).load()
+
+    errors = local_plan.validate()
+    if errors:
+        raise PlanInvalidError(errors)
+
+    try:
+        store, created = open_or_create_mcp_plan(
+            plan_path=args.plan,
+            mcp_server=getattr(args, "mcp_server", "weve-plan"),
+            mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+            mcp_cache=False,  # don't touch the local cache until we're past the guard
+            project_id=getattr(args, "project_id", None),
+            plan_id=getattr(args, "plan_id", None),
+            objective=local_plan.output_value_or_context("objective"),
+        )
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot open the WeveNova plan: {exc}")
+
+    if not created and not args.force:
+        raise SystemExit(
+            f"a WeveNova plan ({store.plan_id}) already exists for this project. "
+            "Pushing reconciles it to the local plan and DELETES upstream tasks not "
+            "present locally — `pull` first to merge, or re-run with --force to "
+            "overwrite it with the local plan."
+        )
+
+    # Past the guard: mirror the post-push WeveNova state back into plan.json.
+    store.cache_path = args.plan
+    try:
+        notices = store.save(local_plan)
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot push the plan to WeveNova: {exc}")
+    for notice in notices:
+        print(f"note: {notice}", file=sys.stderr)
+
+    n_ctx = len(local_plan.context)
+    n_tasks = len(local_plan.tasks)
+    verb = "Created and pushed" if created else "Pushed"
+    print(
+        f"{verb} the plan to WeveNova ({store.plan_id}): {n_ctx} context "
+        f"entr{'y' if n_ctx == 1 else 'ies'} in one write, {n_tasks} task(s). "
+        "Local plan.json now mirrors WeveNova."
+    )
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     plan = _load(args)
     errors = plan.validate()
@@ -686,6 +783,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("pull", help="fetch the plan from the active store (WeveNova MCP with --store mcp) and write the local .md view")
     p.set_defaults(func=cmd_pull)
+
+    p = sub.add_parser("push", help="push the whole local plan.json to WeveNova in one pass (bulk counterpart to pull); --force overwrites an existing plan")
+    p.add_argument("--force", action="store_true", help="reconcile over an existing WeveNova plan (deletes upstream tasks absent locally)")
+    p.set_defaults(func=cmd_push)
 
     p = sub.add_parser("validate", help="validate the plan")
     p.set_defaults(func=cmd_validate)

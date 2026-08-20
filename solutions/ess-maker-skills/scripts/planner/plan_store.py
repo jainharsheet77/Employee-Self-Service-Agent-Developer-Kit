@@ -251,6 +251,34 @@ class McpPlanStore:
                 },
             )
 
+    def _reconcile_plan_fields(self, plan: Plan) -> list[str]:
+        """Push the plan-level **Context + AcceptanceCriteria** to WeveNova when
+        they differ from the server, via ``update_project_plan`` carrying the
+        plan's current ETag as If-Match. This makes the MCP store read-*write* for
+        plan-level intent, not just tasks. Outputs are excluded (WeveNova pins
+        those on task completion). It is a no-op when the projections already match
+        — an unchanged save issues no write — and returns a soft notice (not an
+        error) when the current plan can't be read to diff against."""
+        try:
+            server_doc = self.client.call_tool("get_project_plan", self._ids())
+        except McpError as exc:
+            return [f"plan context not synced (could not read the plan to diff: {exc})."]
+        if not isinstance(server_doc, dict):
+            return ["plan context not synced (unexpected project-plan payload)."]
+        desired = wm.plan_fields_to_weve(plan.data)
+        current = wm.plan_fields_to_weve(wm.plan_from_weve(server_doc))
+        if desired == current:
+            return []
+        etag = self._etag(server_doc) or plan.data.get("etag") or ""
+        try:
+            self.client.call_tool(
+                "update_project_plan",
+                {**self._ids(), "patch": desired, "etag": etag},
+            )
+        except McpError as exc:
+            raise PlanStoreError(f"cannot persist plan context to WeveNova: {exc}") from exc
+        return []
+
     def save(self, plan: Plan) -> list[str]:
         """Reconcile the plan's tasks to WeveNova, then render the ``.md``.
 
@@ -261,8 +289,9 @@ class McpPlanStore:
         tasks are left alone (no no-op writes); a server task no longer in the plan
         is **deleted**. The mutating tools require the current entity ETag as
         If-Match, which is read from the freshly-listed server task. Plan-level
-        context/outputs are read-only over the current MCP surface — a notice is
-        returned when the local plan holds such data that this store cannot push.
+        **context + acceptance criteria are also reconciled** to WeveNova (via
+        :meth:`_reconcile_plan_fields`); only Outputs remain upstream-owned (pinned
+        on task completion) — a notice is returned when the local plan holds them.
         """
         notices: list[str] = []
         try:
@@ -291,10 +320,15 @@ class McpPlanStore:
         except McpError as exc:
             raise PlanStoreError(f"cannot persist tasks to WeveNova: {exc}") from exc
 
+        # Plan-level context + acceptance criteria are read-write over MCP too:
+        # push them when they differ from the server (a no-op when unchanged).
+        notices.extend(self._reconcile_plan_fields(plan))
+
         if plan.outputs:
             notices.append(
                 f"{len(plan.outputs)} pinned output(s) are shown in the plan view but "
-                "are owned by WeveNova upstream (no plan-level write over MCP yet)."
+                "are owned by WeveNova upstream (recorded when a task completes, not "
+                "pushed by this sync)."
             )
 
         # WeveNova is the source of truth: render the human view (and refresh the
@@ -324,21 +358,22 @@ def _odata_items(payload: Any) -> list[dict[str, Any]]:
     return [i for i in items if isinstance(i, dict)]
 
 
-def resolve_plan_binding(
+def resolve_project_binding(
     client: McpClient,
     *,
     project_id: str | None = None,
-    plan_id: str | None = None,
-) -> tuple[str, str, str | None]:
-    """Resolve the ``(project_id, plan_id, tenant_id)`` the multi-plan WeveNova
-    surface needs. Precedence: explicit arg → ``PLANNER_MCP_PROJECT_ID`` /
-    ``PLANNER_MCP_PLAN_ID`` env → **discovery**. Discovery reads
-    ``list_agent_configuration_projects`` (must be exactly one, else the caller
-    must disambiguate) then the project's ``ActivePlanId`` or its single plan.
-    ``tenant_id`` (needed by the role/attest tools) is taken from the resolved
-    project when known."""
+) -> tuple[str, dict[str, Any] | None, str | None]:
+    """Resolve just the ``(project_id, project, tenant_id)`` for the WeveNova
+    agent-configuration project — **without** requiring a plan to exist yet.
+    Precedence: explicit arg → ``PLANNER_MCP_PROJECT_ID`` env → discovery
+    (``list_agent_configuration_projects`` must return exactly one, else the
+    caller must disambiguate). ``tenant_id`` (needed by the role/attest tools) is
+    taken from the resolved project when known.
+
+    This is the seam that lets ``init`` bind a project and then create its *first*
+    plan (:func:`open_or_create_mcp_plan`): plan discovery is deliberately not
+    done here, so a project with no plan is not an error at this step."""
     project_id = project_id or os.environ.get("PLANNER_MCP_PROJECT_ID")
-    plan_id = plan_id or os.environ.get("PLANNER_MCP_PLAN_ID")
     tenant_id: str | None = os.environ.get("PLANNER_MCP_TENANT_ID")
 
     project: dict[str, Any] | None = None
@@ -368,30 +403,118 @@ def resolve_plan_binding(
 
     if project and not tenant_id:
         tenant_id = project.get("TenantId")
+    if not project_id:
+        raise PlanStoreError("could not resolve a WeveNova project_id binding.")
+    return project_id, project, tenant_id
 
+
+def find_existing_plan_id(
+    client: McpClient,
+    *,
+    project_id: str,
+    project: dict[str, Any] | None = None,
+) -> str | None:
+    """Return the project's existing plan id — its ``ActivePlanId`` when set, else
+    its single plan — or ``None`` when the project has **no** plan yet. Raises when
+    the project has several plans and none is active (the caller must pick one via
+    ``PLANNER_MCP_PLAN_ID``). Unlike :func:`resolve_plan_binding`, "no plan" is a
+    normal result here (``None``) rather than an error — it is the signal that
+    ``init`` should create the first plan."""
+    active = project.get("ActivePlanId") if project else None
+    if active:
+        return active
+    try:
+        plans = _odata_items(client.call_tool("list_project_plans", {"projectId": project_id}))
+    except McpError as exc:
+        raise PlanStoreError(f"cannot list plans for project {project_id}: {exc}") from exc
+    if not plans:
+        return None
+    if len(plans) > 1:
+        ids = ", ".join(str(p.get("PlanId")) for p in plans)
+        raise PlanStoreError(
+            "project has multiple plans — set PLANNER_MCP_PLAN_ID to one of: " + ids
+        )
+    return plans[0].get("PlanId")
+
+
+def _plan_id_of(created: Any) -> str | None:
+    """Pull the ``PlanId`` out of a ``create_project_plan`` payload, tolerating a
+    bare plan doc, an OData ``{"value": {...}}`` envelope, a bare id string, or the
+    lowercase ``planId`` the local mapping uses."""
+    if isinstance(created, str):
+        return created or None
+    if isinstance(created, dict):
+        inner = created.get("value") if isinstance(created.get("value"), dict) else created
+        return inner.get("PlanId") or inner.get("planId") or inner.get("Id") or None
+    return None
+
+
+def create_project_plan(
+    client: McpClient,
+    *,
+    project_id: str,
+    objective: str | None = None,
+) -> str:
+    """Create a new plan for an existing WeveNova project and return its
+    ``PlanId``. The live ``create_project_plan`` tool requires a ``{"projectId",
+    "plan"}`` body where ``plan`` is a **WeveNova plan entity** — the top level is
+    ``additionalProperties:false``, so a bare ``objective`` scalar (the shape this
+    sent before) is rejected. The objective is therefore seeded as an
+    ``objective`` **Context** entry — the same shape the local model uses and
+    :func:`weve_mapping.plan_from_weve` reads back — so ``--objective`` survives
+    the create→load round-trip. Called only when the project has no plan yet
+    (:func:`open_or_create_mcp_plan`); an existing plan is reused untouched, never
+    recreated, because the WeveNova plan is owned upstream."""
+    plan_body: dict[str, Any] = {}
+    if objective:
+        plan_body["Context"] = [
+            wm.context_to_weve(
+                {
+                    "key": "objective",
+                    "value": objective,
+                    "group": "objective",
+                    "description": "Primary objective for this ESS rollout.",
+                    "provenance": {"source": "User"},
+                }
+            )
+        ]
+    try:
+        created = client.call_tool(
+            "create_project_plan", {"projectId": project_id, "plan": plan_body}
+        )
+    except McpError as exc:
+        raise PlanStoreError(
+            f"cannot create a WeveNova plan for project {project_id}: {exc}"
+        ) from exc
+    plan_id = _plan_id_of(created)
     if not plan_id:
-        active = project.get("ActivePlanId") if project else None
-        if active:
-            plan_id = active
-        else:
-            try:
-                plans = _odata_items(client.call_tool("list_project_plans", {"projectId": project_id}))
-            except McpError as exc:
-                raise PlanStoreError(f"cannot list plans for project {project_id}: {exc}") from exc
-            if not plans:
-                raise PlanStoreError(
-                    f"project {project_id} has no plans — create one first or set "
-                    "PLANNER_MCP_PLAN_ID."
-                )
-            if len(plans) > 1:
-                ids = ", ".join(str(p.get("PlanId")) for p in plans)
-                raise PlanStoreError(
-                    "project has multiple plans — set PLANNER_MCP_PLAN_ID to one of: " + ids
-                )
-            plan_id = plans[0].get("PlanId")
+        raise PlanStoreError(
+            f"WeveNova create_project_plan returned no PlanId (got {created!r:.120})."
+        )
+    return plan_id
 
-    if not project_id or not plan_id:
-        raise PlanStoreError("could not resolve a WeveNova project_id/plan_id binding.")
+
+def resolve_plan_binding(
+    client: McpClient,
+    *,
+    project_id: str | None = None,
+    plan_id: str | None = None,
+) -> tuple[str, str, str | None]:
+    """Resolve the ``(project_id, plan_id, tenant_id)`` the multi-plan WeveNova
+    surface needs. Precedence: explicit arg → ``PLANNER_MCP_PROJECT_ID`` /
+    ``PLANNER_MCP_PLAN_ID`` env → **discovery** (:func:`resolve_project_binding`
+    then the project's ``ActivePlanId`` or its single plan via
+    :func:`find_existing_plan_id`). Raises when the project has no plan yet —
+    callers that create the first plan use :func:`open_or_create_mcp_plan`."""
+    plan_id = plan_id or os.environ.get("PLANNER_MCP_PLAN_ID")
+    project_id, project, tenant_id = resolve_project_binding(client, project_id=project_id)
+    if not plan_id:
+        plan_id = find_existing_plan_id(client, project_id=project_id, project=project)
+        if not plan_id:
+            raise PlanStoreError(
+                f"project {project_id} has no plans — create one first or set "
+                "PLANNER_MCP_PLAN_ID."
+            )
     return project_id, plan_id, tenant_id
 
 
@@ -431,3 +554,49 @@ def make_store(
             cache_path=cache_path,
         )
     raise PlanStoreError(f"unknown plan store backend: {backend!r}")
+
+
+def open_or_create_mcp_plan(
+    *,
+    plan_path: str,
+    mcp_server: str = "weve-plan",
+    mcp_config: str = os.path.join(".vscode", "mcp.json"),
+    mcp_cache: bool = True,
+    project_id: str | None = None,
+    plan_id: str | None = None,
+    objective: str | None = None,
+) -> tuple[McpPlanStore, bool]:
+    """Open the project's WeveNova plan for ``init``, **creating it upstream when
+    the project has none yet**. Returns ``(store, created)``.
+
+    This fixes the ``init --store mcp`` catch‑22: binding a store through
+    :func:`make_store` / :func:`resolve_plan_binding` requires a plan to already
+    exist, but ``init`` is exactly the command that should create the first plan.
+    So instead of binding the plan up front, this binds the **project** first
+    (:func:`resolve_project_binding`), looks for an existing plan
+    (:func:`find_existing_plan_id`), and only when the project has none — a fresh
+    project, or one whose only plan is archived so discovery finds none — creates
+    one via :func:`create_project_plan` and binds the store to the returned
+    ``PlanId``. An existing plan is reused untouched (never recreated): the
+    WeveNova plan is owned upstream and a blind recreate would drop its tasks."""
+    try:
+        client = client_from_config(mcp_server, mcp_config)
+    except McpError as exc:
+        raise PlanStoreError(str(exc)) from exc
+    pid, project, tid = resolve_project_binding(client, project_id=project_id)
+    plid = plan_id or os.environ.get("PLANNER_MCP_PLAN_ID")
+    if not plid:
+        plid = find_existing_plan_id(client, project_id=pid, project=project)
+    created = False
+    if not plid:
+        plid = create_project_plan(client, project_id=pid, objective=objective)
+        created = True
+    store = McpPlanStore(
+        client,
+        _summary_beside(plan_path),
+        project_id=pid,
+        plan_id=plid,
+        tenant_id=tid,
+        cache_path=plan_path if mcp_cache else None,
+    )
+    return store, created

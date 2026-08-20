@@ -58,10 +58,15 @@ python scripts/planner/cli.py --store mcp pull
 `pull` reads the project's plan (objective/context, tasks, produced outputs,
 status) from WeveNova and writes the local `ESS-scenario-plan.md` view. If it
 returns a plan, **resume it** (below) — do not re-interview. If WeveNova has no
-plan yet for this project, fall through to "start a new one". Run every
-subsequent command with the **same `--store mcp`** so reads and writes stay
-against WeveNova. (If tasks are temporarily unavailable upstream, `pull` still
-shows the plan context/outputs and warns — carry on with what it returned.)
+plan yet for this project, fall through to "start a new one". Use `--store mcp`
+for **live reads** (`pull`, `summary`, the role-gated task lists) so you always
+see the current server state — **but do not run each authoring write against
+`--store mcp`.** That issues one server round-trip per field and per task (the
+plan's ETag climbs `W/"5"`→`W/"6"`→… as WeveNova receives a separate write for
+every command), which is slow and fragile over the tunnel. Instead **author
+locally and publish the whole plan in one pass** — see *Publishing to WeveNova*
+below. (If tasks are temporarily unavailable upstream, `pull` still shows the
+plan context/outputs and warns — carry on with what it returned.)
 
 1. If not WeveNova-backed, check whether a plan already exists at
    `workspace/plan/plan.json`.
@@ -154,3 +159,45 @@ the **ESS scenario plan** Markdown as an editable file — they can revise it di
 or say what to change, and you reconcile it back into the plan
 (`src/skills/planner/edit.md`). (To resume a plan that already exists, see **First**
 above — don't restart the interview.)
+
+## Publishing to WeveNova — author locally, then push once
+
+WeveNova has **no whole-plan write**: `update_project_plan` already carries the
+*entire* Context array in a single call, but **tasks are separate child entities
+the server creates and deletes one at a time** — its own lifecycle rules say
+*"Delete tasks individually … using the current ETag"*, and there is no
+bulk-task tool. So running every `init` / `set-context` / `add-task` with
+`--store mcp` means **one server write per field and per task** — chatty, slow,
+and each round-trip exposed to the flaky tunnel.
+
+Author against the **local** store (the default — just omit `--store mcp`), which
+is instant and offline, then **publish the finished plan to WeveNova in one
+reconcile pass** with `push`:
+
+- **New project (no upstream plan yet):**
+
+  ```
+  python scripts/planner/cli.py init --objective "..."   # author LOCALLY
+  python scripts/planner/cli.py add-task --id T1 ...      #   (no --store mcp)
+  python scripts/planner/cli.py validate                  # check locally
+  python scripts/planner/cli.py push                      # creates plan in ONE pass
+  ```
+
+- **Existing WeveNova plan (extend it):** `pull` first so local starts from the
+  current server state, extend locally, then push with `--force`:
+
+  ```
+  python scripts/planner/cli.py --store mcp pull          # sync down to local
+  python scripts/planner/cli.py add-task --id T7 ...       # extend LOCALLY
+  python scripts/planner/cli.py validate
+  python scripts/planner/cli.py push --force              # one push → WeveNova
+  ```
+
+`push` opens/creates the WeveNova plan and reconciles the whole thing at once:
+**one** `update_project_plan` for all context + acceptance criteria, plus the
+per-task creates the server requires (N tasks are still N creates — a server
+limit, not ours — but batched into this single disciplined pass instead of one
+save per interview step). **`--force`** is required when the plan already exists
+upstream: `push` makes WeveNova **match local**, so it deletes upstream tasks
+absent from your local plan — always `pull` first (as shown) so a co-editor's
+tasks aren't dropped.

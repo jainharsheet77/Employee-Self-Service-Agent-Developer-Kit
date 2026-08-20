@@ -81,6 +81,39 @@ with the user** before attesting (name + UPN), especially for a fuzzy-name searc
 Work IQ is **authoring-time only** — an id it returns is for wiring the plan, never
 a runtime dependency of the deployed ESS agent.
 
+## Resolve a person by name — WeveNova directory (name → aadId)
+
+The **same WeveNova MCP** that holds the plan can also resolve a display name to a
+person's **Entra object id** (`aadId`) — no separate sign-in, because it is the
+backend the plan already uses. Prefer this when the maker names a user **inline**
+and you just need that person's id to attest — e.g. *"assign the Power Platform
+role to `primary`"*:
+
+```
+python scripts/planner/roles_cli.py find-users --name "primary"
+```
+
+Each match prints `displayName  <aadId>`. The `aadId` **is** the Entra object id
+`attest --person` wants, so *"assign the Power Platform role to primary"* becomes a
+two-step lookup-then-attest:
+
+```
+python scripts/planner/roles_cli.py find-users --name "primary"      # -> aadId
+python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
+```
+
+- **Always confirm the match** (name + id) with the maker before attesting — a
+  partial name can hit more than one person; present the candidates and let them
+  pick, never auto-attest the first hit.
+- If `find-users` prints a **warning** that it fell back to the *demo cache* (the
+  live WeveNova directory was briefly unavailable), say so and have the maker
+  confirm the person before you attest — don't treat a cache hit as authoritative.
+- Use this **or** Work IQ — whichever resolves the person. WeveNova's directory is
+  the quickest path when the maker already names the person and the kit is only
+  wired to the plan MCP; Work IQ reaches the full Entra directory and is the way to
+  *discover* role holders (below). Never fabricate an id: if neither resolves the
+  name, ask the maker for the object id or leave the task pooled on the role.
+
 ## Discover who holds a role — reverse lookup ("who is the Power Platform Admin?")
 
 **WeveNova cannot answer this.** By design it *attests, it does not discover*: it
@@ -138,7 +171,7 @@ leave the task pooled on the role to claim later.
 
 The end-to-end for *"assign WorkdayAdmin to Alopez"*:
 
-1. Resolve **Alopez → OID** via Work IQ; confirm the match.
+1. Resolve **Alopez → OID** (via `find-users` or Work IQ); confirm the match.
 2. Attest:
 
    ```

@@ -8,6 +8,7 @@ The deterministic surface the ``/roles`` skill calls to manage **people and
 roles** on a plan, decoupled from the planner (which only *grounds* a role onto
 a task). Everything here is WeveNova-backed (the ``weve-plan`` MCP server):
 
+    python scripts/planner/roles_cli.py find-users --name "<display name>"
     python scripts/planner/roles_cli.py roles [--live]
     python scripts/planner/roles_cli.py attest --person <oid> --role WorkdayAdmin
     python scripts/planner/roles_cli.py assignments [--person <oid>] [--role <id>]
@@ -18,10 +19,11 @@ A *task* is grounded on a **role** by the planner; an **attestation** binds a
 named **person** (their Entra object id) to that role, scoped to the plan, so the
 platform can later show that person the role's tasks (``caller-tasks``, Flow 2).
 
-The person's OID is resolved by the skill *before* it calls this CLI — typically
-via the Work IQ MCP (name/UPN → Entra object id). This CLI only accepts the
-resolved OID; it never does directory lookups itself (it has no signed-in Entra
-session — Work IQ runs under the maker's interactive sign-in).
+The person's OID is resolved before ``attest`` — either via the Work IQ MCP
+(name/UPN -> Entra object id, under the maker's interactive sign-in) or via this
+CLI's own ``find-users`` (a WeveNova people-directory search returning the
+person's ``aadId``, over the same ``weve-plan`` MCP). ``attest`` itself only
+accepts the already-resolved OID and never does directory lookups.
 
 Role strings are validated locally against the registry
 (:data:`planner.roles.DEFAULT_REGISTRY`) and again by WeveNova (ordinal,
@@ -60,6 +62,85 @@ def _attest_client(args: argparse.Namespace):
     except (McpError, PlanStoreError) as exc:
         raise SystemExit(f"cannot reach the WeveNova plan: {exc}")
     return AttestationClient(client, plan_id=plid, tenant_id=tid, project_id=pid)
+
+
+def _weve_client(args: argparse.Namespace):
+    """Build a bare WeveNova MCP client for **people lookup** — no plan binding
+    is needed (``find_users_by_name`` is directory-scoped, not plan-scoped), so
+    this works even before a plan exists."""
+    from planner.mcp_client import McpError, client_from_config
+
+    try:
+        return client_from_config(
+            getattr(args, "mcp_server", "weve-plan"),
+            getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+        )
+    except McpError as exc:
+        raise SystemExit(f"cannot reach the WeveNova MCP server: {exc}")
+
+
+def _users_from_payload(payload) -> list[dict]:
+    """The user records out of a ``find_users_by_name`` payload, tolerating the
+    documented ``{"users": [...]}`` shape, an OData ``{"value": [...]}`` envelope,
+    or a bare list."""
+    if isinstance(payload, dict):
+        items = payload.get("users")
+        if items is None:
+            items = payload.get("value", payload.get("Value", []))
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        items = []
+    return [u for u in (items or []) if isinstance(u, dict)]
+
+
+def _user_aad_id(user: dict) -> str:
+    """The person's Entra object id (``aadId``) from a directory record."""
+    return user.get("aadId") or user.get("AadId") or user.get("id") or user.get("Id") or ""
+
+
+def _user_display_name(user: dict) -> str:
+    return user.get("displayName") or user.get("DisplayName") or user.get("name") or ""
+
+
+def cmd_find_users(args: argparse.Namespace) -> int:
+    """Resolve a person's **Entra object id (``aadId``) from a display name** via
+    the WeveNova people directory (the ``find_users_by_name`` tool on the same
+    ``weve-plan`` MCP the plan lives on) — the WeveNova-native alternative to a
+    Work IQ lookup, needing no separate sign-in. Turns "assign <role> to <name>"
+    into the ``aadId`` that ``attest --person`` wants. Read-only.
+
+    A ``warning`` in the payload means the live directory was unavailable and the
+    result came from the demo cache — surfaced on stderr so the skill can caveat
+    the match instead of trusting it blindly."""
+    from planner.mcp_client import McpError
+
+    client = _weve_client(args)
+    try:
+        payload = client.call_tool("find_users_by_name", {"name": args.name})
+    except McpError as exc:
+        print(f"cannot search the WeveNova people directory: {exc}", file=sys.stderr)
+        return 1
+
+    users = _users_from_payload(payload)
+    warning = payload.get("warning") if isinstance(payload, dict) else None
+
+    if args.json:
+        print(json.dumps(payload, indent=2, default=str))
+        return 0
+    if warning:
+        print(f"warning: {warning}", file=sys.stderr)
+    if not users:
+        print(f"No one in the WeveNova directory matched {args.name!r}.")
+        return 0
+    print(f"{len(users)} match(es) for {args.name!r}:\n")
+    for u in users:
+        src = u.get("source")
+        tag = f"  ({src})" if src else ""
+        print(f"    {_user_display_name(u) or '?'}   <{_user_aad_id(u) or '?'}>{tag}")
+    print("\nAttest with the aadId: "
+          "`roles attest --person <aadId> --role <role>`.")
+    return 0
 
 
 def cmd_roles(args: argparse.Namespace) -> int:
@@ -204,13 +285,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-id", dest="plan_id", default=None, help="WeveNova plan id; else PLANNER_MCP_PLAN_ID or discovery")
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("find-users", help="resolve a person's Entra object id (aadId) from a display name via WeveNova")
+    p.add_argument("--name", required=True, help="full or partial display name to search for (e.g. \"primary\")")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_find_users)
+
     p = sub.add_parser("roles", help="list the valid WeveNova roles (exact wire ids for tasks/attestations)")
     p.add_argument("--live", action="store_true", help="refresh the catalogue from the weve-plan server (else static)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_roles)
 
     p = sub.add_parser("attest", help="attest a person to an attestable role on the plan")
-    p.add_argument("--person", required=True, help="the person's Entra object id (a GUID) — resolve names via Work IQ first")
+    p.add_argument("--person", required=True, help="the person's Entra object id (a GUID) — resolve names via `find-users` or Work IQ first")
     p.add_argument("--role", required=True, help="an attestable role (id or display name; see `roles`)")
     p.add_argument("--provider", help="the role's owner (External/Entra/PowerPlatform); derived when omitted")
     p.add_argument("--idempotency-key", dest="idempotency_key", help="optional idempotency key for replay-safe attest")
