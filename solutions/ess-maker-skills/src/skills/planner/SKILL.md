@@ -139,8 +139,8 @@ The planner **grounds** a role onto a task (Phase 3) but does not name people.
 Binding a named person to a role (**attestation**), listing/revoking those
 records, and the WeveNova-backed "what am I assigned?" (Flow 2) live in the
 separate **`/roles` skill** (`src/skills/roles/SKILL.md`), backed by
-`python scripts/planner/roles_cli.py`. It resolves the person by name (via Work
-IQ) and attests them plan-scoped. Emit role ids **verbatim** (never
+`python scripts/planner/roles_cli.py`. It resolves the person by name (via the
+WeveNova people directory) and attests them plan-scoped. Emit role ids **verbatim** (never
 slugified/lowercased); the `/roles` skill's `roles` listing shows the valid ids.
 Hand off to `/roles` for anything about *who* holds a role.
 

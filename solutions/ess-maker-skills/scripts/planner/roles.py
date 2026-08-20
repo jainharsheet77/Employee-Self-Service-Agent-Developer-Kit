@@ -19,10 +19,11 @@ The planner depends only on the narrow :class:`RoleSource` contract and ships
   * ``list_holders`` returns ``[]`` -> the skill falls back to letting the
     sponsor type the person, and
   * ``roles_of`` returns ``[]`` -> the skill falls back to self-selection
-    (or resolving the caller via Work IQ).
+    (or resolving the caller by name via the WeveNova people directory).
 
-A concrete source (Entra security groups via Graph, Work IQ, a static tenant
-map, ...) can be injected later without touching the Plan schema or the skill.
+A concrete source (the WeveNova people directory, Entra security groups via
+Graph, a static tenant map, ...) can be injected later without touching the Plan
+schema or the skill.
 No network here — the facade is pure; a backing source may do IO.
 """
 

@@ -26,8 +26,9 @@ python scripts/planner/cli.py --store mcp pull
 1. **Find the person's roles.** The roles source is a separate, unbuilt system,
    so this is best-effort:
    - If a roles source is wired, look up the roles this person holds.
-   - If not, resolve the caller's identity (e.g. via Work IQ `/me`) and/or ask
-     them to confirm which of the plan's roles are theirs.
+   - If not, resolve the caller's identity by name via the WeveNova people
+     directory (`find-users`) — or just ask — and/or ask them to confirm which of
+     the plan's roles are theirs.
 2. **Show their Tasks, grouped by role:**
 
    ```

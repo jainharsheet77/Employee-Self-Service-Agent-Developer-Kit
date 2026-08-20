@@ -67,7 +67,8 @@ step actually requires (e.g. registering the Workday enterprise app → the Entr
 > **Person comes later.** Today the role is pooled and the sponsor picks a person
 > (Phase 4, Flow 1). Naming the person who holds a role — and persisting it as a
 > plan **attestation** — belongs to the separate **`/roles` skill**
-> (`src/skills/roles/SKILL.md`): it resolves the person (via Work IQ) and records
+> (`src/skills/roles/SKILL.md`): it resolves the person (via the WeveNova people
+> directory) and records
 > them so they later see the role's pooled tasks. The planner only *grounds* the
 > role onto the task; it does not name people. Keep the role Learn-grounded.
 
@@ -210,7 +211,7 @@ The planner stops at *grounding* the role onto the task. Binding a named **perso
 to a role (**attestation**), listing/revoking those records, and answering "what
 am I assigned?" (Flow 2) live in the separate **`/roles` skill**
 (`src/skills/roles/SKILL.md`), backed by `python scripts/planner/roles_cli.py`.
-That skill resolves the person by name (via Work IQ), attests them plan-scoped,
+That skill resolves the person by name (via the WeveNova people directory), attests them plan-scoped,
 and — once attested — a person's `caller-tasks` shows their direct tasks plus the
 pooled tasks for every role they hold. Hand off to `/roles` for anything about
 *who* holds a role; keep the planner focused on the tasks and their grounded roles.
