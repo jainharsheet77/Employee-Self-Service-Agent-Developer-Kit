@@ -17,10 +17,12 @@ proceed. Listing the valid roles and resolving a person's directory id work with
 no setup at all; the attestation *write* needs the plan backend reachable and
 will say so if it isn't.
 
-Read the authenticated caller's `userName` and `aadId` from `.env`, then use that
-AAD object ID for attestation and caller-scoped tasks. Do not resolve or
-substitute another named user. If the user asks
-**"what am I assigned?"** go to Flow 2.
+The authenticated caller (whose "what am I assigned?" you answer, and who does the
+attesting) comes from the kit's `.env` (`userName` + `aadId`) — never fabricate it.
+To **assign a role to a *named* person** (e.g. *"make primary the Power Platform
+Admin"*), resolve that name to an `aadId` with `find-users --name "<name>"`
+(WeveNova's people search — a temporary Work IQ stand-in), then attest that `aadId`.
+If the user asks **"what am I assigned?"** go to Flow 2 (self-only, the `.env` caller).
 
 Rules:
 1. Never tell the user what files you are reading or what commands you are

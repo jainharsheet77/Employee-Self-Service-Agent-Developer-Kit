@@ -100,6 +100,82 @@ def test_attest_rejects_non_attestable_role(monkeypatch, capsys):
     assert fake.calls == []
 
 
+# --- find-users: resolve a display name -> aadId via WeveNova ---------------- #
+
+class _FakePeopleClient:
+    """MCP client emulating the WeveNova ``find_users_by_name`` people search."""
+
+    def __init__(self, payload) -> None:
+        self._payload = payload
+        self.calls: list[tuple[str, dict]] = []
+
+    def call_tool(self, name, arguments=None):
+        self.calls.append((name, arguments or {}))
+        if name == "find_users_by_name":
+            return self._payload
+        raise McpError(f"unexpected tool {name}")
+
+
+def test_find_users_wired_on_parser():
+    parser = roles_cli.build_parser()
+    args = parser.parse_args(["find-users", "--name", "primary"])
+    assert args.func is roles_cli.cmd_find_users
+    assert args.name == "primary"
+
+
+def test_find_users_resolves_aad_id(monkeypatch, capsys):
+    payload = {
+        "query": "primary",
+        "source": "demo-cache",
+        "users": [
+            {"aadId": "8fde91b6-45cd-4dbf-9908-439cfdd0311e", "displayName": "primary",
+             "source": "user-provided TDS identity"},
+        ],
+    }
+    fake = _FakePeopleClient(payload)
+    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: fake)
+
+    rc = roles_cli.main(["find-users", "--name", "primary"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert fake.calls[-1] == ("find_users_by_name", {"name": "primary"})
+    # the resolved aadId (== Entra object id for attest --person) is surfaced
+    assert "8fde91b6-45cd-4dbf-9908-439cfdd0311e" in out
+    assert "primary" in out
+
+
+def test_find_users_surfaces_demo_cache_warning(monkeypatch, capsys):
+    payload = {
+        "users": [{"aadId": "00000000-0000-0000-0000-000000000001", "displayName": "primary"}],
+        "warning": "WeveNova SearchPeople was unavailable; returned cache results only.",
+    }
+    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakePeopleClient(payload))
+
+    rc = roles_cli.main(["find-users", "--name", "primary"])
+    captured = capsys.readouterr()
+    assert rc == 0                                   # a cache hit is still a hit
+    assert "warning:" in captured.err               # but the caveat is surfaced
+    assert "unavailable" in captured.err
+
+
+def test_find_users_reports_no_match(monkeypatch, capsys):
+    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakePeopleClient({"users": []}))
+    rc = roles_cli.main(["find-users", "--name", "nobody"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "No one in the WeveNova directory matched" in out
+
+
+def test_find_users_json_dumps_raw_payload(monkeypatch, capsys):
+    payload = {"users": [{"aadId": "abc", "displayName": "primary"}], "source": "demo-cache"}
+    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakePeopleClient(payload))
+    rc = roles_cli.main(["find-users", "--name", "primary", "--json"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert '"aadId": "abc"' in out
+    assert '"source": "demo-cache"' in out
+
+
 # --- caller-tasks: self-only "what are my tasks" ---------------------------- #
 
 CALLER = "3541af92-2c5d-4b4a-aad8-5f257de3244d"  # the authenticated tunnel user

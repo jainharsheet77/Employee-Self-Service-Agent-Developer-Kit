@@ -55,17 +55,37 @@ guessing.
 
 ## Current-user context
 
-Read the authenticated user's token profile and AAD object ID from the kit's
-`.env`:
+The authenticated caller — who *does* the attesting, and whose "what am I
+assigned?" you answer — comes from the kit's `.env`, never a flag:
 
 ```text
 userName="default"
 aadId="3541af92-2c5d-4b4a-aad8-5f257de3244d"
 ```
 
-- Do not look up or attest another named user through this demo surface.
-- Never fabricate or substitute an AAD ID.
+- Never fabricate or substitute the caller's AAD ID.
 - The ID is authoring-time only; it is not a deployed-agent runtime dependency.
+
+## Resolve a person by name (assigning a role to someone else)
+
+When the maker says **"assign _<role>_ to _<name>_"** (e.g. *"make primary the
+Power Platform Admin"*), the person you attest is **not** the `.env` caller —
+resolve their name to an `aadId` first:
+
+```
+python scripts/planner/roles_cli.py find-users --name "primary"      # -> displayName <aadId>
+python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
+```
+
+- `find-users` is WeveNova's people search (`find_users_by_name`) — a **temporary
+  stand-in for Work IQ**; it will be swapped for Work IQ once available (same seam,
+  same `aadId` result), so treat it as the name→id resolver, not a permanent API.
+- If the result carries a **`warning`** (the live directory was unavailable and the
+  match came from the demo cache), caveat the match instead of trusting it blindly.
+- If nothing matches, ask the maker to confirm the spelling — **never fabricate an
+  `aadId`**.
+- Any id it returns is an **authoring-time** lookup, never a runtime dependency of
+  the deployed ESS agent.
 
 ## Discover who holds a role — reverse lookup ("who is the Power Platform Admin?")
 
@@ -81,7 +101,8 @@ role R" query** and **no directory-role membership lookup**.
    ```
    python scripts/planner/roles_cli.py assignments --role "Power Platform Administrator"
    ```
-2. **Attest the current user**:
+2. **Attest the holder** — the caller from `.env`, or a **named** person resolved
+   to their `aadId` via `find-users` (see "Resolve a person by name"):
    ```
    python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
    ```
@@ -89,22 +110,23 @@ role R" query** and **no directory-role membership lookup**.
    directory-enumeration seam wired. Do **not** guess or fabricate holders — ask
    the maker to name the person (for external Workday/ServiceNow roles they are the
    source of truth anyway; for Entra / Power Platform admin roles they look the
-   holder up in the Entra or Power Platform admin center), then use step 2.
+   holder up in the Entra or Power Platform admin center). Once named, resolve them
+   with `find-users --name "<name>"` and attest that `aadId` (step 2).
 
 **The flow** — turn "who is the Power Platform Admin?" into a recorded assignment:
 
 ```
-.env ─► authenticated userName + aadId
-                                  │
-                                  ▼
-                     attest  (persist person ↔ role ↔ this plan)
+.env caller  ─┐
+              ├─► aadId ─► attest  (persist person ↔ role ↔ this plan)
+find-users ──┘  (name ─► aadId; temporary Work IQ stand-in)
                                   ▼
               later: they log in ─► WeveNova returns their role-pooled tasks
 ```
 
-## Attest the current user to a role
+## Attest a person to a role
 
-1. Read the authenticated caller's `aadId` from `.env`.
+1. Get the person's `aadId`: the **caller's own** from `.env`, or — for a *named*
+   person — resolve it with `find-users --name "<name>"` first.
 2. Attest:
 
    ```
