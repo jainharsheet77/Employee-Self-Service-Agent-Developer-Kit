@@ -118,29 +118,53 @@ def output_to_weve(art: dict[str, Any]) -> dict[str, Any]:
 
 
 # --- tasks ------------------------------------------------------------------- #
-# The WeveNova task carries assignment as two flat scalars — ``AssignedToId``
-# (person oid) and ``AssignedToRoleId`` (role) — plus a read-only expanded
-# ``AssignedTo`` object. There is no ``Checklist`` field on the task (the local
-# read-back-only checklist is client display state and is dropped on sync).
+# WeveNova assignment is carried by two flat scalars — ``AssignedToId`` and
+# ``AssignedToRoleId`` — plus a read-only expanded ``AssignedTo`` object that
+# names the ``Type`` (``User`` | ``Role``). The **writable** shape adds
+# ``AssignedToType`` (spec §3): a *pooled* role task is
+# ``AssignedToType=Role, AssignedToId=<roleId>, AssignedToRoleId=<roleId>``; a
+# task *claimed by a person but still grounded on a role* is
+# ``AssignedToType=User, AssignedToId=<oid>, AssignedToRoleId=<roleId>``. There is
+# no ``Checklist`` field on the task (the local read-back-only checklist is client
+# display state and is dropped on sync).
 
 def task_from_weve(t: dict[str, Any]) -> dict[str, Any]:
-    """WeveNova Task -> local task. ``TaskId`` becomes the local ``id``;
-    ``AssignedToId`` / ``AssignedToRoleId`` rebuild the local Principal."""
+    """WeveNova Task -> local task. ``TaskId`` becomes the local ``id``. The
+    assignee type is resolved from the expanded ``AssignedTo`` object, else the
+    ``AssignedToType`` scalar, else inferred from the scalars (a pooled task's
+    ``AssignedToId`` equals its ``AssignedToRoleId``)."""
     from planner.plan_model import principal_person, principal_pool
 
     role_id = t.get("AssignedToRoleId")
     user_oid = t.get("AssignedToId")
-    if not role_id and not user_oid:  # fall back to an expanded AssignedTo, if present
-        at = t.get("AssignedTo")
-        if isinstance(at, dict):
-            role_id = (at.get("Role") or {}).get("RoleId") if isinstance(at.get("Role"), dict) else at.get("RoleId")
-            user_oid = at.get("Id") if at.get("Type") == "User" else user_oid
-    if user_oid:
+    atype: str | None = None
+
+    at = t.get("AssignedTo")
+    if isinstance(at, dict) and at.get("Type"):
+        atype = at.get("Type")
+        expanded_role = at.get("Role")
+        if isinstance(expanded_role, dict):
+            role_id = role_id or expanded_role.get("RoleId")
+        if atype == "User":
+            user_oid = user_oid or at.get("Id")
+        elif atype == "Role":
+            role_id = role_id or at.get("Id")
+    if not atype:
+        atype = t.get("AssignedToType")
+
+    if atype == "Role":
+        assigned = principal_pool(role_id) if role_id else {}
+    elif atype == "User":
+        assigned = principal_person(user_oid, role_id=role_id or None) if user_oid else {}
+    elif user_oid and role_id and user_oid == role_id:  # type-less pooled
+        assigned = principal_pool(role_id)
+    elif user_oid:
         assigned = principal_person(user_oid, role_id=role_id or None)
     elif role_id:
         assigned = principal_pool(role_id)
     else:
         assigned = {}
+
     return {
         "id": t.get("TaskId") or t.get("Id") or "",
         "title": t.get("Title", "") or "",
@@ -153,20 +177,33 @@ def task_from_weve(t: dict[str, Any]) -> dict[str, Any]:
 
 
 def task_to_weve(task: dict[str, Any], *, include_id: bool = True) -> dict[str, Any]:
-    """Local task -> WeveNova Task body. Assignment maps to the flat
-    ``AssignedToId`` / ``AssignedToRoleId`` scalars (the writable shape). Omit the
-    id for a create (the server assigns ``TaskId``)."""
+    """Local task -> WeveNova Task body (the writable projection). Emits the
+    spec-§3 assignment scalars: ``AssignedToType`` (``Role``/``User``/``None``),
+    ``AssignedToId`` (the role id when pooled, the person oid when claimed), and
+    the grounding ``AssignedToRoleId``. Omit the id for a create (the server
+    assigns ``TaskId``)."""
     from planner.plan_model import assignee_role_id, assignee_user_oid
 
     assigned = task.get("assignedTo") or {}
+    atype = assigned.get("type")  # "Role" | "User" | None
+    role_id = assignee_role_id(assigned)
+    user_oid = assignee_user_oid(assigned)
+    if atype == "Role":
+        assigned_id: str | None = role_id
+    elif atype == "User":
+        assigned_id = user_oid
+    else:
+        assigned_id = None
+
     body: dict[str, Any] = {
         "Title": task.get("title", "") or "",
         "Description": task.get("description", "") or "",
         "State": task.get("state", "NotStarted") or "NotStarted",
         "Produces": list(task.get("produces") or []),
         "Consumes": list(task.get("consumes") or []),
-        "AssignedToRoleId": assignee_role_id(assigned),
-        "AssignedToId": assignee_user_oid(assigned),
+        "AssignedToType": atype,
+        "AssignedToId": assigned_id,
+        "AssignedToRoleId": role_id,
     }
     if include_id and task.get("id"):
         body["TaskId"] = task["id"]

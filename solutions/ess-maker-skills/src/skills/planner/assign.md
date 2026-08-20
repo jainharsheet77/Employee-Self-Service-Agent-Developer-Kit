@@ -23,6 +23,12 @@ sponsor's only job here is to pick **who** does it. For each Task:
 The person is stored *acting as* the role — both facts are kept, so the Task
 still shows up under that role in Flow 2, and provenance survives.
 
+> **MCP store:** when running against WeveNova (`--store mcp`), also **attest**
+> the named person to the role so Flow 2 (their "my tasks" view) lights up for
+> the pooled role tasks — `planner attest --person <oid> --role <id>` (see
+> `model.md` → "Attest a person to a role"). Use the role's **exact WeveNova id**
+> (run `planner roles`); attestation only accepts the attestable roles.
+
 ## The soft assumption
 
 For the MVP, the sponsor often also holds Power Platform admin access, so they

@@ -117,27 +117,50 @@ def test_task_from_weve_maps_real_task_fixture():
 
 def test_task_round_trip_pool_and_person():
     pooled = new_task("T1", "Set up Workday SSO", description="Register the app",
-                      assigned_to=principal_pool("App/Cloud App Admin"),
+                      assigned_to=principal_pool("WorkdayAdmin"),
                       produces=["workdayEntraApp"], consumes=["primaryEnvironment"])
     weve = wm.task_to_weve(pooled, include_id=False)
     assert weve["Title"] == "Set up Workday SSO"
-    # Assignment maps to the flat scalar shape the server accepts.
-    assert weve["AssignedToRoleId"] == "App/Cloud App Admin"
-    assert weve["AssignedToId"] is None
+    # A pooled role task writes the spec-§3 shape: Type=Role, Id=RoleId=<role>.
+    assert weve["AssignedToType"] == "Role"
+    assert weve["AssignedToRoleId"] == "WorkdayAdmin"
+    assert weve["AssignedToId"] == "WorkdayAdmin"
     assert "AssignedTo" not in weve          # no nested object on write
     assert weve["Produces"] == ["workdayEntraApp"]
     back = wm.task_from_weve({**weve, "TaskId": "srv-1"})
     assert back["id"] == "srv-1"
     assert back["assignedTo"]["type"] == "Role"
-    assert back["assignedTo"]["role"]["roleId"] == "App/Cloud App Admin"
+    assert back["assignedTo"]["role"]["roleId"] == "WorkdayAdmin"
 
     owned = new_task("T2", "Run setup",
-                     assigned_to=principal_person("oid-9", role_id="power-platform-admin"),
+                     assigned_to=principal_person("oid-9", role_id="Power Platform Administrator"),
                      produces=["primaryEnvironment"])
     weve2 = wm.task_to_weve(owned)
+    assert weve2["AssignedToType"] == "User"
     assert weve2["AssignedToId"] == "oid-9"
-    assert weve2["AssignedToRoleId"] == "power-platform-admin"
+    assert weve2["AssignedToRoleId"] == "Power Platform Administrator"
     assert weve2["TaskId"] == "T2"
     back2 = wm.task_from_weve(weve2)
     assert back2["assignedTo"]["user"]["oid"] == "oid-9"
-    assert back2["assignedTo"]["role"]["roleId"] == "power-platform-admin"
+    assert back2["assignedTo"]["role"]["roleId"] == "Power Platform Administrator"
+
+
+def test_task_round_trip_pooled_from_expanded_assignedto():
+    # A real read returns pooled assignment via the expanded AssignedTo object
+    # (no AssignedToType scalar), with AssignedToId carrying the role id.
+    server_task = {
+        "TaskId": "srv-2",
+        "Title": "Allow Workday egress",
+        "AssignedToId": "Network Administrator",
+        "AssignedToRoleId": "Network Administrator",
+        "AssignedTo": {"Type": "Role", "Id": "Network Administrator",
+                       "Role": {"RoleId": "Network Administrator"}},
+        "State": "NotStarted",
+    }
+    task = wm.task_from_weve(server_task)
+    assert task["assignedTo"]["type"] == "Role"
+    assert task["assignedTo"]["role"]["roleId"] == "Network Administrator"
+    # Round-trips back to a stable writable projection (change-detection no-op).
+    assert wm.task_to_weve(task, include_id=False) == wm.task_to_weve(
+        wm.task_from_weve(wm.task_to_weve(task, include_id=False)), include_id=False
+    )

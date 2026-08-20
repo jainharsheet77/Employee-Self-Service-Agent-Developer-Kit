@@ -54,6 +54,20 @@ def _csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _canonical_role(role: str | None) -> str | None:
+    """Normalise a role to its exact WeveNova wire id when the registry
+    recognises it (so a display name / casing variant like ``Workday
+    Administrator`` or ``environment maker`` becomes ``WorkdayAdmin`` /
+    ``Environment Maker``). An unrecognised role is passed through verbatim — the
+    absent-safe local store still accepts free-form roles."""
+    if not role:
+        return role
+    from planner.roles import DEFAULT_REGISTRY
+
+    hit = DEFAULT_REGISTRY.find(role)
+    return hit.role if hit else role
+
+
 def _store(args: argparse.Namespace):
     """Build the Plan store for this invocation (local file, or WeveNova MCP)."""
     from planner.plan_store import PlanStoreError, make_store
@@ -65,9 +79,33 @@ def _store(args: argparse.Namespace):
             plan_path=args.plan,
             mcp_server=getattr(args, "mcp_server", "weve-plan"),
             mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+            project_id=getattr(args, "project_id", None),
+            plan_id=getattr(args, "plan_id", None),
         )
     except PlanStoreError as exc:
         raise SystemExit(f"plan store error: {exc}")
+
+
+def _attest_client(args: argparse.Namespace):
+    """Build the role-attestation client (WeveNova only). Resolves the
+    project/plan/tenant binding from args, env, or discovery."""
+    from planner.attest import AttestationClient
+    from planner.mcp_client import McpError, client_from_config
+    from planner.plan_store import PlanStoreError, resolve_plan_binding
+
+    try:
+        client = client_from_config(
+            getattr(args, "mcp_server", "weve-plan"),
+            getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+        )
+        pid, plid, tid = resolve_plan_binding(
+            client,
+            project_id=getattr(args, "project_id", None),
+            plan_id=getattr(args, "plan_id", None),
+        )
+    except (McpError, PlanStoreError) as exc:
+        raise SystemExit(f"cannot reach the WeveNova plan: {exc}")
+    return AttestationClient(client, plan_id=plid, tenant_id=tid, project_id=pid)
 
 
 def _load(args: argparse.Namespace) -> Plan:
@@ -203,10 +241,11 @@ def cmd_add_system(args: argparse.Namespace) -> int:
 def cmd_add_task(args: argparse.Namespace) -> int:
     plan = _load(args)
     assigned: dict | None = None
+    role = _canonical_role(args.role)
     if args.person:
-        assigned = principal_person(args.person, role_id=args.role)
-    elif args.role:
-        assigned = principal_pool(args.role)
+        assigned = principal_person(args.person, role_id=role)
+    elif role:
+        assigned = principal_pool(role)
     plan.add_task(
         new_task(
             args.id,
@@ -246,9 +285,10 @@ def cmd_remove_task(args: argparse.Namespace) -> int:
 
 def cmd_assign(args: argparse.Namespace) -> int:
     plan = _load(args)
-    plan.assign_task(args.task, role_id=args.role, person_oid=args.person)
+    role = _canonical_role(args.role)
+    plan.assign_task(args.task, role_id=role, person_oid=args.person)
     _save(plan, args)
-    who = args.person or f"{args.role} (pool)"
+    who = args.person or f"{role} (pool)"
     print(f"Assigned {args.task!r} to {who}")
     return 0
 
@@ -477,6 +517,137 @@ def _extract_signals_for(selected: list[dict[str, str]]) -> dict[str, list[dict[
     }
 
 
+def cmd_roles(args: argparse.Namespace) -> int:
+    """List the valid WeveNova roles (the exact wire ids a task/attestation must
+    use). Offline from the static catalogue by default; ``--live`` refreshes from
+    the server."""
+    from planner.roles import DEFAULT_REGISTRY, RoleRegistry
+
+    registry = DEFAULT_REGISTRY
+    if getattr(args, "live", False):
+        from planner.mcp_client import McpError, client_from_config
+
+        try:
+            client = client_from_config(
+                getattr(args, "mcp_server", "weve-plan"),
+                getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+            )
+            registry = RoleRegistry.from_mcp(client)
+        except McpError as exc:
+            print(f"warning: could not refresh roles from the server ({exc}); using the static catalogue", file=sys.stderr)
+
+    if args.json:
+        print(json.dumps(
+            [
+                {
+                    "role": r.role,
+                    "provider": r.provider,
+                    "displayName": r.display_name,
+                    "attestable": r.attestable,
+                }
+                for r in registry._by_id.values()  # noqa: SLF001 — CLI dump
+            ],
+            indent=2,
+        ))
+        return 0
+    print("Task-groundable roles (use the exact id verbatim):\n")
+    for r in registry._by_id.values():  # noqa: SLF001 — CLI dump
+        tag = "  [attestable]" if r.attestable else ""
+        label = r.role if r.display_name == r.role else f"{r.role}  ({r.display_name})"
+        print(f"    {label}   <{r.provider}>{tag}")
+    print("\nAttestable roles can be bound to a person with `planner attest`.")
+    return 0
+
+
+def cmd_attest(args: argparse.Namespace) -> int:
+    """Attest a person (their Entra object id) to an attestable role on the plan."""
+    from planner.attest import AttestationError
+
+    client = _attest_client(args)
+    try:
+        rec = client.attest(
+            args.person,
+            args.role,
+            provider=args.provider,
+            idempotency_key=args.idempotency_key,
+            etag=args.etag,
+        )
+    except AttestationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(rec, indent=2))
+    else:
+        aid = rec.get("AssignmentId") or rec.get("Id") or "?"
+        print(f"Attested {args.person} to {rec.get('Role', args.role)} (assignment {aid}).")
+    return 0
+
+
+def cmd_assignments(args: argparse.Namespace) -> int:
+    """List the plan's role assignments (who is attested to which role)."""
+    from planner.attest import AttestationError
+
+    client = _attest_client(args)
+    try:
+        items = client.list_assignments(
+            subject_id=args.person, role=args.role, status=args.status
+        )
+    except AttestationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(items, indent=2))
+        return 0
+    if not items:
+        print("No role assignments on this plan.")
+        return 0
+    print(f"{len(items)} role assignment(s):\n")
+    for a in items:
+        aid = a.get("AssignmentId") or a.get("Id") or "?"
+        print(f"    {a.get('Role', '?')}  ->  {a.get('SubjectId', '?')}  "
+              f"[{a.get('Status', '?')}]  ({aid})")
+    return 0
+
+
+def cmd_revoke(args: argparse.Namespace) -> int:
+    """Revoke a role assignment on the plan."""
+    from planner.attest import AttestationError
+
+    client = _attest_client(args)
+    try:
+        client.revoke(args.assignment, etag=args.etag)
+    except AttestationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(f"Revoked assignment {args.assignment}.")
+    return 0
+
+
+def cmd_caller_tasks(args: argparse.Namespace) -> int:
+    """Show the tasks a logged-in person sees on the plan: their directly-assigned
+    tasks **plus** the pooled tasks for the roles they are attested to (Flow 2,
+    server-resolved via WeveNova)."""
+    from planner.attest import AttestationError
+
+    client = _attest_client(args)
+    try:
+        tasks = client.tasks_for_caller(args.caller)
+    except AttestationError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(tasks, indent=2))
+        return 0
+    if not tasks:
+        print("No tasks are waiting on you right now.")
+        return 0
+    print(f"{len(tasks)} task(s) visible to you:\n")
+    for t in tasks:
+        tid = t.get("TaskId") or t.get("Id") or "?"
+        print(f"    - {tid}  {t.get('Title', '')}  [{t.get('State', '?')}]")
+    return 0
+
+
 def cmd_summary(args: argparse.Namespace) -> int:
     """Render and print the plan's Markdown view. **Read-only** — it does NOT
     rewrite ``ESS-scenario-plan.md`` (mutating commands already regenerate it via
@@ -539,6 +710,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--mcp-server", dest="mcp_server", default="weve-plan", help="MCP server name in .vscode/mcp.json (store=mcp)")
     parser.add_argument("--mcp-config", dest="mcp_config", default=os.path.join(".vscode", "mcp.json"), help="path to the MCP config (store=mcp)")
+    parser.add_argument("--project-id", dest="project_id", default=None, help="WeveNova project id (store=mcp / attest); else PLANNER_MCP_PROJECT_ID or discovery")
+    parser.add_argument("--plan-id", dest="plan_id", default=None, help="WeveNova plan id (store=mcp / attest); else PLANNER_MCP_PLAN_ID or discovery")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="create a new plan")
@@ -650,6 +823,37 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--roles", help="comma-separated roles the person holds")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_mine)
+
+    p = sub.add_parser("roles", help="list the valid WeveNova roles (exact wire ids for tasks/attestations)")
+    p.add_argument("--live", action="store_true", help="refresh the catalogue from the weve-plan server (else static)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_roles)
+
+    p = sub.add_parser("attest", help="attest a person to an attestable role on the plan (WeveNova)")
+    p.add_argument("--person", required=True, help="the person's Entra object id (a GUID)")
+    p.add_argument("--role", required=True, help="an attestable role (id or display name; see `planner roles`)")
+    p.add_argument("--provider", help="the role's owner (External/Entra/PowerPlatform); derived when omitted")
+    p.add_argument("--idempotency-key", dest="idempotency_key", help="optional idempotency key for replay-safe attest")
+    p.add_argument("--etag", help="optional If-Match etag for convergence")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_attest)
+
+    p = sub.add_parser("assignments", help="list the plan's role assignments (WeveNova)")
+    p.add_argument("--person", help="filter by subject (person) oid")
+    p.add_argument("--role", help="filter by role (id or display name)")
+    p.add_argument("--status", help="filter by status, e.g. Active/Revoked")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_assignments)
+
+    p = sub.add_parser("revoke", help="revoke a role assignment on the plan (WeveNova)")
+    p.add_argument("--assignment", required=True, help="the assignment id to revoke")
+    p.add_argument("--etag", help="optional If-Match etag")
+    p.set_defaults(func=cmd_revoke)
+
+    p = sub.add_parser("caller-tasks", help="show a logged-in person's tasks: direct + pooled-for-their-roles (WeveNova, Flow 2)")
+    p.add_argument("--caller", required=True, help="the caller's Entra object id (a GUID)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_caller_tasks)
 
     p = sub.add_parser("research", help="preview Learn page selection from a TOC")
     p.add_argument("--tokens", help="intent tokens, e.g. 'workday servicenow'")
