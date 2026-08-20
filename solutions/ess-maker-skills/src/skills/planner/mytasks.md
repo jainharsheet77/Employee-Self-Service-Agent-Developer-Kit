@@ -29,6 +29,15 @@ python scripts/planner/cli.py --store mcp pull
    - If not, resolve the caller's identity by name via the WeveNova people
      directory (`find-users`) — or just ask — and/or ask them to confirm which of
      the plan's roles are theirs.
+
+   > **MCP store — "my tasks" is self-only.** Against WeveNova (`--store mcp`),
+   > don't resolve or ask for the roles — hand off to the `/roles` skill's
+   > `caller-tasks`, which resolves them server-side from the caller's
+   > attestations. The caller id it needs is the **authenticated** person's *own*
+   > OID (the tunnel-signed-in user, or `PLANNER_MCP_CALLER_ID`) — WeveNova only
+   > expands role-pooled tasks for the caller's own identity. **Never** pass a
+   > name looked up via `find-users` (e.g. "primary") as the caller — that's for
+   > `attest`, and as a caller it returns none of their pooled tasks.
 2. **Show their Tasks, grouped by role:**
 
    ```

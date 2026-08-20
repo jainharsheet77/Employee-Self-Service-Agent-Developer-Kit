@@ -102,6 +102,22 @@ def _user_display_name(user: dict) -> str:
     return user.get("displayName") or user.get("DisplayName") or user.get("name") or ""
 
 
+def _resolve_caller_id(args: argparse.Namespace) -> str | None:
+    """The caller's own Entra object id for the caller-scoped task query.
+
+    Precedence: explicit ``--caller`` → ``PLANNER_MCP_CALLER_ID`` env (mirrors how
+    project/plan/tenant resolve). This has to be the **authenticated** caller —
+    the identity the ``weve-plan`` tunnel token signs in as — because WeveNova
+    expands role-pooled tasks for the caller's *own* OID only (self-only). A
+    looked-up person (e.g. a ``find-users`` result for "primary") is **not** the
+    authenticated caller, so it will not surface their pooled tasks here."""
+    caller = getattr(args, "caller", None)
+    if caller and caller.strip():
+        return caller.strip()
+    env = os.environ.get("PLANNER_MCP_CALLER_ID")
+    return env.strip() if env and env.strip() else None
+
+
 def cmd_find_users(args: argparse.Namespace) -> int:
     """Resolve a person's **Entra object id (``aadId``) from a display name** via
     the WeveNova people directory (the ``find_users_by_name`` tool on the same
@@ -251,12 +267,37 @@ def cmd_revoke(args: argparse.Namespace) -> int:
 def cmd_caller_tasks(args: argparse.Namespace) -> int:
     """Show the tasks a logged-in person sees on the plan: their directly-assigned
     tasks **plus** the pooled tasks for the roles they are attested to (Flow 2,
-    server-resolved via WeveNova)."""
-    from planner.attest import AttestationError
+    server-resolved via WeveNova).
+
+    Caller-scoped and **self-only**: the caller id must be the *authenticated*
+    identity (the tunnel-signed-in user), resolved from ``--caller`` or
+    ``PLANNER_MCP_CALLER_ID``. WeveNova only expands role-pooled tasks for the
+    caller's **own** OID, so a display name or a looked-up person (e.g. "primary")
+    won't surface their tasks — it must be a GUID, and it must be *you*."""
+    from planner.attest import AttestationError, is_oid
+
+    caller = _resolve_caller_id(args)
+    if not caller:
+        print(
+            "caller id required: pass --caller <your-own-oid> or set "
+            "PLANNER_MCP_CALLER_ID. It must be YOUR authenticated identity — "
+            "WeveNova expands role-pooled tasks for your own OID only (self-only), "
+            "so a looked-up person (e.g. 'primary') won't surface their tasks here.",
+            file=sys.stderr,
+        )
+        return 2
+    if not is_oid(caller):
+        print(
+            f"caller id must be an Entra object id (a GUID), got {caller!r}. "
+            "This is the caller's own authenticated OID, not a display name — "
+            "resolve a name to its aadId with `find-users` only for `attest`, not here.",
+            file=sys.stderr,
+        )
+        return 2
 
     client = _attest_client(args)
     try:
-        tasks = client.tasks_for_caller(args.caller)
+        tasks = client.tasks_for_caller(caller, odata_filter=getattr(args, "filter", None))
     except AttestationError as exc:
         print(str(exc), file=sys.stderr)
         return 1
@@ -315,8 +356,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--etag", help="optional If-Match etag")
     p.set_defaults(func=cmd_revoke)
 
-    p = sub.add_parser("caller-tasks", help="show a logged-in person's tasks: direct + pooled-for-their-roles (Flow 2)")
-    p.add_argument("--caller", required=True, help="the caller's Entra object id (a GUID)")
+    p = sub.add_parser("caller-tasks", help="show YOUR tasks: direct + pooled-for-your-roles (Flow 2, self-only)")
+    p.add_argument(
+        "--caller",
+        help="YOUR own authenticated Entra object id (a GUID); defaults to "
+        "PLANNER_MCP_CALLER_ID. Must be the tunnel-authenticated caller — role "
+        "expansion is self-only, so a looked-up person (e.g. 'primary') won't work",
+    )
+    p.add_argument(
+        "--filter",
+        dest="filter",
+        help="optional extra OData $filter; the caller scope is applied "
+        "automatically, so don't repeat an assignedToId predicate",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_caller_tasks)
 

@@ -174,3 +174,108 @@ def test_find_users_json_dumps_raw_payload(monkeypatch, capsys):
     assert rc == 0
     assert '"aadId": "abc"' in out
     assert '"source": "demo-cache"' in out
+
+
+# --- caller-tasks: self-only "what are my tasks" ---------------------------- #
+
+CALLER = "3541af92-2c5d-4b4a-aad8-5f257de3244d"  # the authenticated tunnel user
+
+
+class _FakeCallerClient:
+    """MCP client emulating ``list_project_plan_tasks_for_caller`` — records the
+    args so tests can assert the caller scope (and any OData query) sent."""
+
+    def __init__(self, tasks=None) -> None:
+        self._tasks = list(tasks) if tasks is not None else []
+        self.calls: list[tuple[str, dict]] = []
+
+    def call_tool(self, name, arguments=None):
+        self.calls.append((name, arguments or {}))
+        if name == "list_project_plan_tasks_for_caller":
+            return {"value": list(self._tasks)}
+        raise McpError(f"unexpected tool {name}")
+
+
+def _caller_client(tasks=None) -> AttestationClient:
+    return AttestationClient(
+        _FakeCallerClient(tasks), plan_id=PLAN, tenant_id=TENANT, project_id=PROJECT
+    )
+
+
+def test_tasks_for_caller_sends_caller_scope_without_query():
+    """Passing only the caller id sends ``callerId`` (WeveNova's self-scope
+    sentinel) and NO ``query`` — role expansion is the server's job, not a
+    client-built ``assignedToId`` filter."""
+    client = _caller_client([{"TaskId": "t1", "Title": "Configure Workday", "State": "NotStarted"}])
+    tasks = client.tasks_for_caller(CALLER)
+    assert [t["TaskId"] for t in tasks] == ["t1"]
+    name, args = client.client.calls[-1]
+    assert name == "list_project_plan_tasks_for_caller"
+    assert args["callerId"] == CALLER
+    assert args["projectId"] == PROJECT and args["planId"] == PLAN
+    assert "query" not in args  # no invented / duplicated caller predicate
+
+
+def test_tasks_for_caller_builds_odata_query_object():
+    """An extra ``$filter`` is sent as an OData options **object** (``query.filter``),
+    never a bare string — matching the ``list_project_plan_tasks_for_caller`` schema."""
+    client = _caller_client([])
+    client.tasks_for_caller(CALLER, odata_filter="state eq 'NotStarted'")
+    _, args = client.client.calls[-1]
+    assert args["query"] == {"filter": "state eq 'NotStarted'"}
+    assert args["callerId"] == CALLER  # caller scope still carried separately
+
+
+def test_caller_tasks_defaults_caller_from_env(monkeypatch, capsys):
+    """`caller-tasks` with no ``--caller`` falls back to ``PLANNER_MCP_CALLER_ID``
+    (the authenticated caller), mirroring how project/plan/tenant resolve."""
+    monkeypatch.setenv("PLANNER_MCP_CALLER_ID", CALLER)
+    client = _caller_client([{"TaskId": "t1", "Title": "Configure Workday", "State": "NotStarted"}])
+    monkeypatch.setattr(roles_cli, "_attest_client", lambda args: client)
+
+    rc = roles_cli.main(["caller-tasks"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    _, args = client.client.calls[-1]
+    assert args["callerId"] == CALLER  # the env caller flowed through as self-scope
+    assert "Configure Workday" in out
+
+
+def test_caller_tasks_explicit_arg_beats_env(monkeypatch, capsys):
+    monkeypatch.setenv("PLANNER_MCP_CALLER_ID", "00000000-0000-0000-0000-000000000000")
+    client = _caller_client([])
+    monkeypatch.setattr(roles_cli, "_attest_client", lambda args: client)
+
+    rc = roles_cli.main(["caller-tasks", "--caller", CALLER])
+    assert rc == 0
+    _, args = client.client.calls[-1]
+    assert args["callerId"] == CALLER
+
+
+def _must_not_build(args):  # pragma: no cover - only invoked on a guardrail bug
+    raise AssertionError("_attest_client must not be reached before a valid caller")
+
+
+def test_caller_tasks_requires_a_caller(monkeypatch, capsys):
+    """No ``--caller`` and no env → a clear self-only usage error, and NO server
+    path is taken (the guardrail returns before the client is built)."""
+    monkeypatch.delenv("PLANNER_MCP_CALLER_ID", raising=False)
+    monkeypatch.setattr(roles_cli, "_attest_client", _must_not_build)
+
+    rc = roles_cli.main(["caller-tasks"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "PLANNER_MCP_CALLER_ID" in err
+    assert "self-only" in err
+
+
+def test_caller_tasks_rejects_name_as_caller(monkeypatch, capsys):
+    """A display name (e.g. 'primary') is not a GUID — rejected before any call,
+    so it can't silently return zero role-pooled tasks."""
+    monkeypatch.delenv("PLANNER_MCP_CALLER_ID", raising=False)
+    monkeypatch.setattr(roles_cli, "_attest_client", _must_not_build)
+
+    rc = roles_cli.main(["caller-tasks", "--caller", "primary"])
+    err = capsys.readouterr().err
+    assert rc == 2
+    assert "GUID" in err

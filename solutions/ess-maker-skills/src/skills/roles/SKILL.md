@@ -180,13 +180,28 @@ Once attested, a person sees their **directly-assigned tasks plus the pooled tas
 for every role they hold**, resolved server-side by WeveNova:
 
 ```
-python scripts/planner/roles_cli.py caller-tasks --caller <their-oid>
+python scripts/planner/roles_cli.py caller-tasks --caller <your-own-oid>
 ```
 
-WeveNova has **no "who am I" lookup**, so get the caller's own OID by asking their
-name and resolving it with `find-users` (confirm the match), or ask them for their
-object id directly. Present the result in plain language — the tasks waiting on
-them, grouped sensibly.
+**This is self-only.** The caller id must be the **authenticated** identity — the
+person signed in to this workspace (the `weve-plan` tunnel token's user), the same
+OID `list_project_plan_tasks_for_caller` sees upstream. WeveNova treats `callerId`
+as a *self-scope marker* and only then expands the roles **that caller** holds into
+their pooled tasks. So:
+
+- WeveNova has **no "who am I" lookup**, so get the caller's **own** OID by
+  resolving their name with `find-users` (confirm the match is really them), by
+  asking them for their object id, or by setting it once as `PLANNER_MCP_CALLER_ID`
+  and omitting `--caller`.
+- Do **not** pass a *different* person's OID to see their work — the self-scope is
+  yours alone. A `find-users` result for someone else (e.g. "primary") is for
+  `attest`, **not** as the caller here: WeveNova reads a non-self OID as a plain
+  literal filter and returns none of their role-pooled tasks, so it can't answer
+  "what is *that person* assigned?".
+- A plain task list (no caller) returns **all** tasks on the plan — the "my tasks"
+  scoping only happens with this caller marker, never implicitly.
+
+Present the result in plain language — the tasks waiting on them, grouped sensibly.
 
 > **Offline fallback:** when there is no WeveNova plan wired, the planner's local
 > equivalent is `python scripts/planner/cli.py mine --person <oid> --roles

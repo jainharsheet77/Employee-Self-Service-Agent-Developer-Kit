@@ -231,17 +231,39 @@ class AttestationClient:
 
     # -- caller tasks (Flow 2) ------------------------------------------- #
 
-    def tasks_for_caller(self, caller_id: str, *, query: str | None = None) -> list[dict[str, Any]]:
+    def tasks_for_caller(
+        self, caller_id: str, *, odata_filter: str | None = None
+    ) -> list[dict[str, Any]]:
         """The tasks a logged-in person sees: their directly-assigned tasks
         **plus** the pooled tasks for every role they are attested to on this
-        plan (``list_project_plan_tasks_for_caller``)."""
+        plan (``list_project_plan_tasks_for_caller``).
+
+        ``caller_id`` **must be the authenticated caller's own Entra object id**
+        — the identity the ``weve-plan`` tunnel token signs in as. WeveNova reads
+        ``callerId`` as a *self-scope sentinel* (equivalent to the OData
+        ``$filter=assignedToId eq '<callerId>'`` marker the server intercepts):
+        it strips that predicate and expands the caller's attested roles into
+        their pooled tasks. This is **self-only** — passing a *different* person's
+        OID (e.g. someone resolved via ``find-users``) is treated as an ordinary
+        literal filter and returns **none** of the role-pooled work, so it must
+        not be used to answer "what is *that* person assigned?".
+
+        A plain ``list_project_plan_tasks`` (no ``callerId``) returns *all* tasks
+        on the plan — role scoping is opt-in via this sentinel, never implicit.
+
+        ``odata_filter`` is sent as an **additional** ``$filter`` (WeveNova's
+        ``query.filter`` option). The caller scope is applied by the server from
+        ``callerId`` — do **not** repeat the ``assignedToId`` predicate here (the
+        parser rejects a duplicated caller term)."""
         args: dict[str, Any] = {
             "projectId": self._require_project(),
             "planId": self.plan_id,
             "callerId": caller_id,
         }
-        if query:
-            args["query"] = query
+        if odata_filter:
+            # ``query`` is an OData-options object per the tool schema, not a
+            # bare string — the $filter goes under ``query.filter``.
+            args["query"] = {"filter": odata_filter}
         try:
             payload = self.client.call_tool("list_project_plan_tasks_for_caller", args)
         except McpError as exc:
