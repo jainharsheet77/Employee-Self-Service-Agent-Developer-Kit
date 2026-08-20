@@ -1,7 +1,10 @@
 # Planner — Flow 2: "What am I assigned?"
 
-When a person asks what work is waiting on them, show their Tasks **grouped by
-each role they hold** — which naturally covers a person with more than one role.
+When a person asks what work is waiting on them, show the Tasks assigned to them —
+their direct assignments **plus** the pooled Tasks for the roles they hold. Against
+WeveNova you never resolve those roles yourself: pass the person's own id and the
+server expands their attested roles. Grouping the result by role is a *display*
+choice, not a reason to query role-by-role.
 
 ## Steps
 
@@ -13,58 +16,54 @@ here** and think no backend is configured:
 python scripts/planner/cli.py --store mcp pull
 ```
 
-- Returns a plan → continue to step 1 (resolve roles, show tasks).
+- Returns a plan → continue to step 1 (show their tasks).
 - Returns an **empty plan / "no plans yet"** → there genuinely are no assignments
   because no plan has been authored yet; say so and offer to **build** one (hand
   back to the planner's plan-creation flow). Do **not** claim "no plan exists"
   without having pulled.
-- Errors that WeveNova is unreachable/unconfigured → fall back to the local plan
-  (`summary`) and the best-effort role resolution below.
+- Errors that WeveNova is unreachable/unconfigured → fall back to the **offline**
+  path in step 1 (`mine --person … --roles …`, where you supply the roles
+  manually because there's no server to resolve them).
 
 **Never answer "nothing is assigned / no plan exists" until this pull has run.**
 
-1. **Find the person's roles.** The roles source is a separate, unbuilt system,
-   so this is best-effort:
-   - If a roles source is wired, look up the roles this person holds.
-   - If not, resolve the caller's identity by name via the WeveNova people
-     directory (`find-users`) — or just ask — and/or ask them to confirm which of
-     the plan's roles are theirs.
-
-   > **MCP store — "my tasks" is self-only.** Against WeveNova (`--store mcp`),
-   > don't resolve or ask for the roles — hand off to the `/roles` skill's
-   > `caller-tasks`, which resolves them server-side from the caller's
-   > attestations. The caller id it needs is the **authenticated** person's *own*
-   > OID (the tunnel-signed-in user, or `PLANNER_MCP_CALLER_ID`) — WeveNova only
-   > expands role-pooled tasks for the caller's own identity. **Never** pass a
-   > name looked up via `find-users` (e.g. "primary") as the caller — that's for
-   > `attest`, and as a caller it returns none of their pooled tasks.
-2. **Show their Tasks, grouped by role:**
+1. **Show the tasks waiting on them — let WeveNova resolve the roles.** Against
+   WeveNova (`--store mcp`, the default backend) this is owned by the **`/roles`
+   skill**; hand off to its `caller-tasks`:
 
    ```
-   python scripts/planner/cli.py mine --person <oid> --roles <role,role,...>
+   python scripts/planner/roles_cli.py caller-tasks --caller <their-own-oid>
    ```
 
-   This lists, under each role:
-   - Tasks **assigned to them** directly ("assigned to you"), and
-   - Open **pools** for a role they hold ("open to your role"), which they can
-     pick up.
+   You need **only the caller's own OID** — the authenticated, tunnel-signed-in
+   person (or `PLANNER_MCP_CALLER_ID`). **Do not look up, ask for, or infer their
+   roles** — there is no client-side role API, and you never enumerate roles to
+   build the query. Passing the caller id *is* the whole mechanism: WeveNova reads
+   it as a self-scope marker, expands the roles that caller is attested to
+   **server-side**, and returns their directly-assigned tasks **plus** the pooled
+   tasks for those roles. (Self-only: a *different* person's OID — or a
+   `find-users` result for someone else, e.g. "primary" — returns none of their
+   pooled work; that lookup is for `attest`, not as the caller. See
+   `src/skills/roles/SKILL.md`.)
 
-   > **MCP store:** against WeveNova (`--store mcp`), "what am I assigned?" is
-   > owned by the **`/roles` skill** (`src/skills/roles/SKILL.md`): its
-   > `caller-tasks --caller <oid>` resolves the person's roles from their
-   > **attestations** server-side (no manual `--roles`) and returns their direct
-   > tasks **and** the pooled tasks for every role they're attested to. Hand off
-   > to `/roles`. The `mine --roles …` form above is the offline equivalent when
-   > no roles source is wired.
+   > **Offline fallback only** — when step 0 reported WeveNova
+   > unreachable/unconfigured (no live plan), the local equivalent is:
+   > ```
+   > python scripts/planner/cli.py mine --person <oid> --roles <role,…>
+   > ```
+   > Here — and *only* here — you supply the roles manually, because there's no
+   > server to resolve them: ask the person which of the plan's roles are theirs
+   > (or resolve their identity with `find-users`). Never do this against a live
+   > WeveNova plan — let the server expand roles.
 
-3. **Claiming a pooled Task.** If they take a pooled Task, record them as the
+2. **Claiming a pooled Task.** If they take a pooled Task, record them as the
    owner (the role is retained):
 
    ```
    python scripts/planner/cli.py claim --task <T#> --person <oid>
    ```
 
-4. From there, they do the Task (as its description says) and you capture its
+3. From there, they do the Task (as its description says) and you capture its
    output (Phase 6, `src/skills/planner/capture.md`).
 
 ## Before they start — connect their kit to the plan's environment

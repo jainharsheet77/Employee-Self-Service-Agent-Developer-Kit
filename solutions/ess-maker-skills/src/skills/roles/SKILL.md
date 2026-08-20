@@ -177,7 +177,9 @@ Present the roster as role → person lines, not raw output.
 ## Flow 2 — "what am I assigned?"
 
 Once attested, a person sees their **directly-assigned tasks plus the pooled tasks
-for every role they hold**, resolved server-side by WeveNova:
+for every role they hold** — resolved **server-side** by WeveNova. You pass only
+their own OID; there is **no role API to enumerate**, so never look up or resolve
+their roles client-side to build the query:
 
 ```
 python scripts/planner/roles_cli.py caller-tasks --caller <your-own-oid>
