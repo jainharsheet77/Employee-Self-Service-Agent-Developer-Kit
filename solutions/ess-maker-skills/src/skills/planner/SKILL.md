@@ -74,11 +74,11 @@ shows the plan context/outputs and warns — carry on with what it returned.)
      front of you (Flow 2 — read `src/skills/planner/mytasks.md`): the tasks
      assigned to them or open to a role they hold, that aren't already Completed.
      A task is shown **only** if the person holds the role it needs. Against
-     WeveNova (`--store mcp`) role resolution is **server-side** — `caller-tasks
-     --caller <oid>` returns their direct + attested-role tasks
-     (`src/skills/planner/mytasks.md`). Otherwise it's best-effort: resolve the
-     caller's identity or ask which of the plan's roles are theirs, then show only
-     those roles' tasks.
+     WeveNova (`--store mcp`) role resolution is **server-side** and owned by the
+     **`/roles` skill** — its `caller-tasks --caller <oid>` returns their direct +
+     attested-role tasks. Otherwise it's best-effort: resolve the caller's
+     identity or ask which of the plan's roles are theirs, then show only those
+     roles' tasks.
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
      **edit** the plan — they can revise the ESS scenario plan Markdown directly
      or just say what to change, and you reconcile it (`src/skills/planner/edit.md`),
@@ -117,24 +117,16 @@ per **First** above instead of re-running the interview.)
 When a person asks **"what am I assigned?"**, skip to Flow 2:
 read `src/skills/planner/mytasks.md`.
 
-### Role & attestation commands (WeveNova / `--store mcp`)
+### Roles & people are a separate skill (`/roles`)
 
-Roles must be emitted as their **exact WeveNova ids** (verbatim — never
-slugified/lowercased; see `src/skills/planner/model.md`). Discover the valid ids
-and bind a person to a role with:
-
-| Command | Purpose |
-|---------|---------|
-| `planner roles [--live]` | List the valid role ids (`[attestable]` marks the ones you can attest); `--live` refreshes from the server |
-| `planner attest --person <oid> --role <id>` | Bind a named person to a role, plan-scoped (Phase 4 → `assign.md`) |
-| `planner assignments` | List the plan's attestations (roster) |
-| `planner revoke --assignment <id>` | Revoke an attestation |
-| `planner caller-tasks --caller <oid>` | Flow 2 — that person's direct + attested-role tasks, server-resolved |
-
-Role ids are validated locally against the registry before the call and again by
-WeveNova (ordinal, case-sensitive). Attestation accepts only the **attestable**
-roles (External / Entra / PowerPlatform); the internal `Agent*` authority roles
-are not attestable.
+The planner **grounds** a role onto a task (Phase 3) but does not name people.
+Binding a named person to a role (**attestation**), listing/revoking those
+records, and the WeveNova-backed "what am I assigned?" (Flow 2) live in the
+separate **`/roles` skill** (`src/skills/roles/SKILL.md`), backed by
+`python scripts/planner/roles_cli.py`. It resolves the person by name (via Work
+IQ) and attests them plan-scoped. Emit role ids **verbatim** (never
+slugified/lowercased); the `/roles` skill's `roles` listing shows the valid ids.
+Hand off to `/roles` for anything about *who* holds a role.
 
 > **Critical — build the whole plan, not just setup.** Run *all six phases in
 > order*. Phase 3 must emit the **full task set** grounded in research and the

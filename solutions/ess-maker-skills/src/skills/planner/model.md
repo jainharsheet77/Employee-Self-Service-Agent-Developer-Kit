@@ -47,9 +47,9 @@ validates a task's role **ordinally and case-sensitively** with no normalization
 so a slug like `power-platform-administrator`, a lowercase `workday administrator`,
 or a spaceless `PowerPlatformAdministrator` is **rejected** — the wire id is
 `Power Platform Administrator` / `WorkdayAdmin`. Run `python
-scripts/planner/cli.py roles` to list the valid ids (the CLI also accepts a
-display name and normalises it to the id, e.g. `Workday Administrator` →
-`WorkdayAdmin`). The valid universe (id → provider):
+scripts/planner/roles_cli.py roles` to list the valid ids (the `--role` argument
+also accepts a display name and normalises it to the id, e.g. `Workday
+Administrator` → `WorkdayAdmin`). The valid universe (id → provider):
 
 - Internal authority (PascalCase): `AgentOwner`, `AgentEditor`, `AgentAnnotator`,
   `AgentViewer`.
@@ -65,11 +65,11 @@ step actually requires (e.g. registering the Workday enterprise app → the Entr
 `Environment Maker`). Do not invent a role that isn't in this list.
 
 > **Person comes later.** Today the role is pooled and the sponsor picks a person
-> (Phase 4, Flow 1). When the sponsor names the person who holds a role, persist
-> it as a plan **attestation** with `python scripts/planner/cli.py attest --person
-> <oid> --role <id>` (the *role skill*, §"Attest a person to a role" below), so
-> that person later sees the role's pooled tasks via `caller-tasks`. Do not
-> hardcode people; keep the role Learn-grounded.
+> (Phase 4, Flow 1). Naming the person who holds a role — and persisting it as a
+> plan **attestation** — belongs to the separate **`/roles` skill**
+> (`src/skills/roles/SKILL.md`): it resolves the person (via Work IQ) and records
+> them so they later see the role's pooled tasks. The planner only *grounds* the
+> role onto the task; it does not name people. Keep the role Learn-grounded.
 
 ## A Task is not a skill's steps — but split on every role boundary
 
@@ -104,7 +104,8 @@ Use the role id **verbatim** as `--role` (no slugifying, no lowercasing, no
 hyphenation) — WeveNova stores and validates it character-for-character. `WorkdayAdmin`
 is the compact External id (the display name is *Workday Administrator*); the Entra
 and PowerPlatform ids are already the spaced Title-Case display strings. Map each
-checklist `role:` to the nearest valid id from `planner roles`; the id set is the
+checklist `role:` to the nearest valid id from the roles listing
+(`python scripts/planner/roles_cli.py roles`); the id set is the
 same for every plan and matches the WeveNova registry, while the Learn page stays
 the grounding anchor. Confirm the exact split from that skill's checklist; never
 assume it.
@@ -203,43 +204,13 @@ python scripts/planner/cli.py add-task --id T10 --title "Publish the agent" --de
 Also register the scenarios and their dependencies (see `interview.md`) so the
 plan shows knowledge-before-ticketing. Then show the summary and go to Phase 4.
 
-## Attest a person to a role (the role skill)
+## Naming people & "what am I assigned?" — the `/roles` skill
 
-A pooled task is grounded on a **role**; an **attestation** binds a named
-**person** to that role, scoped to the plan, so the platform can later show that
-person the role's tasks. When the sponsor names who holds a role (Phase 4),
-persist it:
-
-```
-# who is the Workday Administrator?  -> attest them to the role on this plan
-python scripts/planner/cli.py --store mcp attest --person <person-entra-oid> --role WorkdayAdmin
-# list the plan's attestations / roster
-python scripts/planner/cli.py --store mcp assignments
-# revoke one
-python scripts/planner/cli.py --store mcp revoke --assignment <assignmentId>
-```
-
-Rules the skill must mirror (validated locally before the call, then by WeveNova):
-
-- **`--person` is an Entra object id (a GUID)** — the person the role belongs to,
-  not the person attesting (that identity comes from the signed-in caller).
-- **`--role` must be an _attestable_ role** (`planner roles` marks these
-  `[attestable]`): the External/Entra/PowerPlatform roles. Internal `Agent*`
-  authority roles are **not** attestable.
-- The **provider is derived** from the role (`WorkdayAdmin`→External,
-  `Global Administrator`→Entra, `Environment Maker`→PowerPlatform); pass
-  `--provider` only to override, and it must own the role.
-- Attestations are **plan-scoped** and **idempotent** (re-attesting the same
-  person↔role returns the existing assignment).
-
-## A person sees their tasks (Flow 2, server-resolved)
-
-Once attested, when that person opens the plan they get their **directly-assigned
-tasks plus the pooled tasks for every role they hold**, resolved by WeveNova:
-
-```
-python scripts/planner/cli.py --store mcp caller-tasks --caller <their-entra-oid>
-```
-
-This is the WeveNova-backed Flow 2. (The local `mine --person <oid> --roles …`
-command is the offline equivalent when there is no roles source wired.)
+The planner stops at *grounding* the role onto the task. Binding a named **person**
+to a role (**attestation**), listing/revoking those records, and answering "what
+am I assigned?" (Flow 2) live in the separate **`/roles` skill**
+(`src/skills/roles/SKILL.md`), backed by `python scripts/planner/roles_cli.py`.
+That skill resolves the person by name (via Work IQ), attests them plan-scoped,
+and — once attested — a person's `caller-tasks` shows their direct tasks plus the
+pooled tasks for every role they hold. Hand off to `/roles` for anything about
+*who* holds a role; keep the planner focused on the tasks and their grounded roles.

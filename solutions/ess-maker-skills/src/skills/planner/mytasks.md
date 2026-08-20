@@ -21,12 +21,13 @@ each role they hold** — which naturally covers a person with more than one rol
    - Open **pools** for a role they hold ("open to your role"), which they can
      pick up.
 
-   > **MCP store:** against WeveNova (`--store mcp`), the server resolves the
-   > person's roles from their **attestations** — no manual `--roles` needed:
-   > `planner caller-tasks --caller <their-oid>` returns their direct tasks **and**
-   > the pooled tasks for every role they're attested to on the plan (see
-   > `model.md` → "A person sees their tasks"). The `mine --roles …` form above is
-   > the offline equivalent when no roles source is wired.
+   > **MCP store:** against WeveNova (`--store mcp`), "what am I assigned?" is
+   > owned by the **`/roles` skill** (`src/skills/roles/SKILL.md`): its
+   > `caller-tasks --caller <oid>` resolves the person's roles from their
+   > **attestations** server-side (no manual `--roles`) and returns their direct
+   > tasks **and** the pooled tasks for every role they're attested to. Hand off
+   > to `/roles`. The `mine --roles …` form above is the offline equivalent when
+   > no roles source is wired.
 
 3. **Claiming a pooled Task.** If they take a pooled Task, record them as the
    owner (the role is retained):
