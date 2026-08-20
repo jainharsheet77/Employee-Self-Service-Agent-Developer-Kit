@@ -8,7 +8,6 @@ The deterministic surface the ``/roles`` skill calls to manage **people and
 roles** on a plan, decoupled from the planner (which only *grounds* a role onto
 a task). Everything here is WeveNova-backed (the ``weve-plan`` MCP server):
 
-    python scripts/planner/roles_cli.py current-user
     python scripts/planner/roles_cli.py roles [--live]
     python scripts/planner/roles_cli.py attest --person <oid> --role WorkdayAdmin
     python scripts/planner/roles_cli.py assignments [--person <oid>] [--role <id>]
@@ -19,8 +18,7 @@ A *task* is grounded on a **role** by the planner; an **attestation** binds a
 named **person** (their Entra object id) to that role, scoped to the plan, so the
 platform can later show that person the role's tasks (``caller-tasks``, Flow 2).
 
-The current caller's OID is resolved via ``current-user`` from the same
-``weve-plan`` MCP the plan lives on. ``attest`` accepts the resolved OID.
+The current caller's token profile and OID come from the kit's ``.env``.
 
 Role strings are validated locally against the registry
 (:data:`planner.roles.DEFAULT_REGISTRY`) and again by WeveNova (ordinal,
@@ -61,72 +59,24 @@ def _attest_client(args: argparse.Namespace):
     return AttestationClient(client, plan_id=plid, tenant_id=tid, project_id=pid)
 
 
-def _weve_client(args: argparse.Namespace):
-    """Build a bare WeveNova MCP client for current-user lookup."""
-    from planner.mcp_client import McpError, client_from_config
-
-    try:
-        return client_from_config(
-            getattr(args, "mcp_server", "weve-plan"),
-            getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
-        )
-    except McpError as exc:
-        raise SystemExit(f"cannot reach the WeveNova MCP server: {exc}")
-
-
-def _user_aad_id(user: dict) -> str:
-    """The person's Entra object id (``aadId``) from a directory record."""
-    return user.get("aadId") or user.get("AadId") or user.get("id") or user.get("Id") or ""
-
-
-def _user_display_name(user: dict) -> str:
-    return user.get("displayName") or user.get("DisplayName") or user.get("name") or ""
-
-
 def _resolve_caller_id(args: argparse.Namespace) -> str | None:
     """The caller's own Entra object id for the caller-scoped task query.
 
-    Precedence: explicit ``--caller`` → ``PLANNER_MCP_CALLER_ID`` env → the
-    ``get_current_user_context`` MCP tool (the default). This has to be the
-    **authenticated** caller — the identity the ``weve-plan`` tunnel token signs
-    in as — because WeveNova expands role-pooled tasks for the caller's *own* OID
-    only (self-only). ``get_current_user_context`` returns exactly that
-    authenticated caller, so its OID surfaces only that caller's own pooled tasks;
-    a different, hand-supplied OID would not."""
+    Precedence: explicit ``--caller`` → ``PLANNER_MCP_CALLER_ID`` env → the kit
+    ``.env`` aadId. This must be the authenticated caller because WeveNova expands
+    role-pooled tasks for the caller's own OID only."""
     caller = getattr(args, "caller", None)
     if caller and caller.strip():
         return caller.strip()
     env = os.environ.get("PLANNER_MCP_CALLER_ID")
     if env and env.strip():
         return env.strip()
-    from planner.mcp_client import McpError
+    from planner.mcp_client import load_adk_identity
 
-    try:
-        payload = _weve_client(args).call_tool("get_current_user_context", {})
-    except McpError:
-        return None
-    return _user_aad_id(payload) if isinstance(payload, dict) else None
-
-
-def cmd_current_user(args: argparse.Namespace) -> int:
-    """Return the authenticated WeveNova/TDS caller and its AAD object ID."""
-    from planner.mcp_client import McpError
-
-    client = _weve_client(args)
-    try:
-        payload = client.call_tool("get_current_user_context", {})
-    except McpError as exc:
-        print(f"cannot resolve the current WeveNova user: {exc}", file=sys.stderr)
-        return 1
-
-    if args.json:
-        print(json.dumps(payload, indent=2, default=str))
-        return 0
-    if not isinstance(payload, dict) or not _user_aad_id(payload):
-        print("The current WeveNova user context is unavailable.", file=sys.stderr)
-        return 1
-    print(f"{_user_display_name(payload) or '?'}   <{_user_aad_id(payload)}>")
-    return 0
+    _user_name, aad_id = load_adk_identity(
+        getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json"))
+    )
+    return aad_id
 
 
 def cmd_roles(args: argparse.Namespace) -> int:
@@ -242,16 +192,16 @@ def cmd_caller_tasks(args: argparse.Namespace) -> int:
 
     Caller-scoped and **self-only**: the caller id must be the *authenticated*
     identity (the tunnel-signed-in user), resolved from ``--caller``,
-    ``PLANNER_MCP_CALLER_ID``, or ``get_current_user_context``. WeveNova only
+    ``PLANNER_MCP_CALLER_ID``, or the kit ``.env`` aadId. WeveNova only
     expands role-pooled tasks for the caller's own OID."""
     from planner.attest import AttestationError, is_oid
 
     caller = _resolve_caller_id(args)
     if not caller:
         print(
-            "could not resolve your caller id — get_current_user_context returned "
-            "nothing and neither --caller nor PLANNER_MCP_CALLER_ID is set. It must "
-            "be YOUR authenticated identity (self-only).",
+            "could not resolve your caller id — set .env aadId, pass --caller, or "
+            "set PLANNER_MCP_CALLER_ID. It must be YOUR authenticated identity "
+            "(self-only).",
             file=sys.stderr,
         )
         return 2
@@ -293,17 +243,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--plan-id", dest="plan_id", default=None, help="WeveNova plan id; else PLANNER_MCP_PLAN_ID or discovery")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("current-user", help="get the authenticated WeveNova caller and AAD object id")
-    p.add_argument("--json", action="store_true")
-    p.set_defaults(func=cmd_current_user)
-
     p = sub.add_parser("roles", help="list the valid WeveNova roles (exact wire ids for tasks/attestations)")
     p.add_argument("--live", action="store_true", help="refresh the catalogue from the weve-plan server (else static)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_roles)
 
     p = sub.add_parser("attest", help="attest a person to an attestable role on the plan")
-    p.add_argument("--person", required=True, help="the current person's Entra object id (a GUID) — resolve it via `current-user`")
+    p.add_argument("--person", required=True, help="the current person's Entra object id (a GUID), normally from .env aadId")
     p.add_argument("--role", required=True, help="an attestable role (id or display name; see `roles`)")
     p.add_argument("--provider", help="the role's owner (External/Entra/PowerPlatform); derived when omitted")
     p.add_argument("--idempotency-key", dest="idempotency_key", help="optional idempotency key for replay-safe attest")
@@ -327,7 +273,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--caller",
         help="YOUR own authenticated Entra object id (a GUID); defaults to "
-        "PLANNER_MCP_CALLER_ID, then get_current_user_context. Must be the "
+        "PLANNER_MCP_CALLER_ID, then .env aadId. Must be the "
         "tunnel-authenticated caller because role expansion is self-only",
     )
     p.add_argument(

@@ -92,8 +92,8 @@ plan context/outputs and warns — carry on with what it returned.)
      A task is shown **only** if the person holds the role it needs. Against
      WeveNova (`--store mcp`) role resolution is **server-side** and owned by the
      **`/roles` skill** — its `caller-tasks` returns their direct + attested-role
-     tasks for the **authenticated** caller, resolved automatically via
-     `get_current_user_context` (self-only; `--caller`/`PLANNER_MCP_CALLER_ID` are
+     tasks for the **authenticated** caller, resolved automatically from the kit
+     `.env` `aadId` (self-only; `--caller`/`PLANNER_MCP_CALLER_ID` are
      optional overrides). Otherwise it's best-effort: ask which of the plan's roles
      are theirs, then show only those roles' tasks.
    - Offer next actions: **continue/extend** the plan (add or assign tasks),

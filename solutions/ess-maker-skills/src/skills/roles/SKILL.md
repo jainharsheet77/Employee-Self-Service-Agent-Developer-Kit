@@ -53,20 +53,14 @@ or casing variant like *"Workday Administrator"* maps to `WorkdayAdmin`); if it
 isn't a valid **attestable** role, surface the "must be one of …" list rather than
 guessing.
 
-## Resolve the current user
+## Current-user context
 
-Use the authenticated WeveNova/TDS identity for role and caller-scoped operations:
+Read the authenticated user's token profile and AAD object ID from the kit's
+`.env`:
 
-```
-python scripts/planner/roles_cli.py current-user
-```
-
-It prints `displayName <aadId>`. The current no-auth tunnel identity is `default`.
-Use that `aadId` for attestation and caller-task filtering:
-
-```
-python scripts/planner/roles_cli.py current-user                     # -> aadId
-python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
+```text
+userName="default"
+aadId="3541af92-2c5d-4b4a-aad8-5f257de3244d"
 ```
 
 - Do not look up or attest another named user through this demo surface.
@@ -89,7 +83,6 @@ role R" query** and **no directory-role membership lookup**.
    ```
 2. **Attest the current user**:
    ```
-   python scripts/planner/roles_cli.py current-user                 # -> aadId
    python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platform Administrator"
    ```
 3. **Tenant-wide discovery ("find me the admins") is not available.** There is no
@@ -101,7 +94,7 @@ role R" query** and **no directory-role membership lookup**.
 **The flow** — turn "who is the Power Platform Admin?" into a recorded assignment:
 
 ```
-current-user ─► authenticated aadId
+.env ─► authenticated userName + aadId
                                   │
                                   ▼
                      attest  (persist person ↔ role ↔ this plan)
@@ -111,7 +104,7 @@ current-user ─► authenticated aadId
 
 ## Attest the current user to a role
 
-1. Resolve the authenticated caller with `current-user`.
+1. Read the authenticated caller's `aadId` from `.env`.
 2. Attest:
 
    ```
@@ -162,9 +155,8 @@ OID `list_project_plan_tasks_for_caller` sees upstream. WeveNova treats `callerI
 as a *self-scope marker* and only then expands the roles **that caller** holds into
 their pooled tasks. So:
 
-- `caller-tasks` resolves the caller automatically through
-  `get_current_user_context`; `--caller` and `PLANNER_MCP_CALLER_ID` remain explicit
-  overrides.
+- `caller-tasks` resolves the caller automatically from `.env` `aadId`;
+  `--caller` and `PLANNER_MCP_CALLER_ID` remain explicit overrides.
 - Do **not** pass a *different* person's OID to see their work — the self-scope is
   yours alone; a non-self OID is treated as a literal filter and will not expand
   that person's role-pooled tasks.

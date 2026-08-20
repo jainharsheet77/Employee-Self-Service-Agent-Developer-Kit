@@ -72,3 +72,77 @@ def test_ping_project_plan_uses_env_binding(monkeypatch):
     assert client.get_args == {"projectId": "pr-env", "planId": "pl-env"}
     # With both ids pinned, no plan discovery is needed.
     assert not any(n == "list_project_plans" for n, _ in client.calls)
+
+
+# -- identity: .env resolution + per-call injection ------------------------- #
+
+
+def test_load_adk_identity_prefers_process_env(monkeypatch, tmp_path):
+    """Process env (``PLANNER_MCP_USER_NAME`` + ``PLANNER_MCP_AAD_ID``) wins and no
+    file is read."""
+    monkeypatch.setenv("PLANNER_MCP_USER_NAME", "  envuser  ")
+    monkeypatch.setenv("PLANNER_MCP_AAD_ID", "  env-aad  ")
+    name, aad = mcp_client.load_adk_identity(tmp_path / ".vscode" / "mcp.json")
+    assert (name, aad) == ("envuser", "env-aad")
+
+
+def test_load_adk_identity_reads_env_file(monkeypatch, tmp_path):
+    """Absent process env, the kit ``.env`` beside the config's parent is parsed;
+    quoted / space-padded ``aadId`` + ``userName`` are unwrapped."""
+    monkeypatch.delenv("PLANNER_MCP_USER_NAME", raising=False)
+    monkeypatch.delenv("PLANNER_MCP_AAD_ID", raising=False)
+    (tmp_path / ".env").write_text(
+        'aadId= "3541af92-2c5d-4b4a-aad8-5f257de3244d"\n'
+        'userName= "default"\n'
+        'displayName= "default"\n',
+        encoding="utf-8",
+    )
+    name, aad = mcp_client.load_adk_identity(tmp_path / ".vscode" / "mcp.json")
+    assert aad == "3541af92-2c5d-4b4a-aad8-5f257de3244d"
+    assert name == "default"
+
+
+def test_load_adk_identity_missing_returns_none(monkeypatch, tmp_path):
+    monkeypatch.delenv("PLANNER_MCP_USER_NAME", raising=False)
+    monkeypatch.delenv("PLANNER_MCP_AAD_ID", raising=False)
+    assert mcp_client.load_adk_identity(tmp_path / ".vscode" / "mcp.json") == (None, None)
+
+
+class _RpcRecorder(mcp_client.McpClient):
+    """An McpClient with its transport stubbed so ``call_tool``'s argument shaping
+    can be asserted without a network."""
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__("http://example", **kwargs)
+        self._initialized = True
+        self.sent: dict | None = None
+
+    def _rpc(self, method, params=None):
+        self.sent = {"method": method, "params": params}
+        return {"content": [{"type": "text", "text": "{}"}]}
+
+
+def test_call_tool_injects_env_identity_into_every_call():
+    """The ``.env`` ``userName``/``aadId`` ride on every tool call so WeveNova
+    knows the caller without a separate identity round-trip."""
+    client = _RpcRecorder(user_name="default", aad_id="aad-1")
+    client.call_tool("list_project_plan_tasks_for_caller", {"callerId": "c1"})
+    args = client.sent["params"]["arguments"]
+    assert args["callerId"] == "c1"
+    assert args["userName"] == "default"
+    assert args["aadId"] == "aad-1"
+
+
+def test_call_tool_does_not_override_explicit_identity_args():
+    client = _RpcRecorder(user_name="default", aad_id="aad-1")
+    client.call_tool("t", {"aadId": "explicit", "userName": "override"})
+    args = client.sent["params"]["arguments"]
+    assert args["aadId"] == "explicit"
+    assert args["userName"] == "override"
+
+
+def test_call_tool_without_identity_sends_bare_arguments():
+    client = _RpcRecorder()  # no .env identity resolved
+    client.call_tool("t", {"callerId": "c1"})
+    args = client.sent["params"]["arguments"]
+    assert args == {"callerId": "c1"}

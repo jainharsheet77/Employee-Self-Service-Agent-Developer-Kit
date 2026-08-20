@@ -60,9 +60,18 @@ def _extract_result(body: str, content_type: str) -> dict[str, Any]:
 class McpClient:
     """A tiny JSON-RPC-over-HTTP MCP client for a single server."""
 
-    def __init__(self, url: str, headers: dict[str, str] | None = None, timeout: float = 90.0) -> None:
+    def __init__(
+        self,
+        url: str,
+        headers: dict[str, str] | None = None,
+        timeout: float = 90.0,
+        user_name: str | None = None,
+        aad_id: str | None = None,
+    ) -> None:
         self.url = url
         self.timeout = timeout
+        self.user_name = user_name
+        self.aad_id = aad_id
         self._headers = {
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
@@ -135,7 +144,12 @@ class McpClient:
         """
         if not self._initialized:
             self.initialize()
-        result = self._rpc("tools/call", {"name": name, "arguments": arguments or {}}) or {}
+        tool_arguments = dict(arguments or {})
+        if self.user_name and "userName" not in tool_arguments:
+            tool_arguments["userName"] = self.user_name
+        if self.aad_id and "aadId" not in tool_arguments:
+            tool_arguments["aadId"] = self.aad_id
+        result = self._rpc("tools/call", {"name": name, "arguments": tool_arguments}) or {}
         blocks = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
         text = "\n".join(blocks).strip()
         if result.get("isError"):
@@ -177,6 +191,33 @@ def load_mcp_server(
         raise McpError(f"server {name!r} not found in {config_path}")
     return {"url": server["url"], "headers": server.get("headers") or {}}
 
+def load_adk_identity(config_path: str | os.PathLike[str] = DEFAULT_MCP_CONFIG) -> tuple[str | None, str | None]:
+    """Load the MCP token profile and AAD ID from process env or the kit's .env."""
+    user_name = os.environ.get("PLANNER_MCP_USER_NAME")
+    aad_id = os.environ.get("PLANNER_MCP_AAD_ID")
+    if user_name and aad_id:
+        return user_name.strip(), aad_id.strip()
+
+    env_path = os.path.abspath(
+        os.path.join(os.path.dirname(os.fspath(config_path)) or ".", "..", ".env")
+    )
+    values: dict[str, str] = {}
+    try:
+        with open(env_path, "r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip("\"'")
+    except OSError:
+        pass
+
+    return (
+        (user_name or values.get("userName") or values.get("displayName") or "").strip() or None,
+        (aad_id or values.get("aadId") or "").strip() or None,
+    )
+
 
 def client_from_config(
     name: str = DEFAULT_SERVER_NAME,
@@ -184,7 +225,14 @@ def client_from_config(
     timeout: float = 90.0,
 ) -> McpClient:
     server = load_mcp_server(name, config_path)
-    return McpClient(server["url"], server.get("headers"), timeout=timeout)
+    user_name, aad_id = load_adk_identity(config_path)
+    return McpClient(
+        server["url"],
+        server.get("headers"),
+        timeout=timeout,
+        user_name=user_name,
+        aad_id=aad_id,
+    )
 
 
 def _ping_project_plan(client: McpClient) -> str:

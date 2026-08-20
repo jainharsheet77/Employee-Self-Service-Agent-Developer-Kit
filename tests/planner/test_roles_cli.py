@@ -11,7 +11,7 @@ threads the person/role through to the attestation client.
 
 from __future__ import annotations
 
-from planner import roles_cli
+from planner import mcp_client, roles_cli
 from planner.attest import AttestationClient
 from planner.mcp_client import McpError
 
@@ -100,62 +100,6 @@ def test_attest_rejects_non_attestable_role(monkeypatch, capsys):
     assert fake.calls == []
 
 
-# --- current-user: resolve the authenticated caller via WeveNova ------------ #
-
-class _FakeCurrentUserClient:
-    """MCP client emulating the WeveNova ``get_current_user_context`` tool."""
-
-    def __init__(self, payload) -> None:
-        self._payload = payload
-        self.calls: list[tuple[str, dict]] = []
-
-    def call_tool(self, name, arguments=None):
-        self.calls.append((name, arguments or {}))
-        if name == "get_current_user_context":
-            return self._payload
-        raise McpError(f"unexpected tool {name}")
-
-
-def test_current_user_wired_on_parser():
-    parser = roles_cli.build_parser()
-    args = parser.parse_args(["current-user"])
-    assert args.func is roles_cli.cmd_current_user
-
-
-def test_current_user_prints_display_name_and_aad_id(monkeypatch, capsys):
-    payload = {"aadId": "3541af92-2c5d-4b4a-aad8-5f257de3244d", "displayName": "default"}
-    fake = _FakeCurrentUserClient(payload)
-    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: fake)
-
-    rc = roles_cli.main(["current-user"])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert fake.calls[-1] == ("get_current_user_context", {})
-    # the authenticated caller's own aadId (for caller-scope + attest) is surfaced
-    assert "3541af92-2c5d-4b4a-aad8-5f257de3244d" in out
-    assert "default" in out
-
-
-def test_current_user_reports_unavailable(monkeypatch, capsys):
-    """When the tool yields no aadId, current-user reports it (rc 1) rather than
-    printing a bogus identity."""
-    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakeCurrentUserClient({}))
-    rc = roles_cli.main(["current-user"])
-    err = capsys.readouterr().err
-    assert rc == 1
-    assert "unavailable" in err
-
-
-def test_current_user_json_dumps_raw_payload(monkeypatch, capsys):
-    payload = {"aadId": "abc", "displayName": "default"}
-    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakeCurrentUserClient(payload))
-    rc = roles_cli.main(["current-user", "--json"])
-    out = capsys.readouterr().out
-    assert rc == 0
-    assert '"aadId": "abc"' in out
-    assert '"displayName": "default"' in out
-
-
 # --- caller-tasks: self-only "what are my tasks" ---------------------------- #
 
 CALLER = "3541af92-2c5d-4b4a-aad8-5f257de3244d"  # the authenticated tunnel user
@@ -236,16 +180,12 @@ def _must_not_build(args):  # pragma: no cover - only invoked on a guardrail bug
     raise AssertionError("_attest_client must not be reached before a valid caller")
 
 
-def test_caller_tasks_auto_resolves_caller_via_current_user(monkeypatch, capsys):
-    """With no ``--caller`` and no env, caller-tasks resolves the caller through
-    ``get_current_user_context`` and uses that own OID as the self-scope — so the
-    person is never asked for their AAD id."""
+def test_caller_tasks_auto_resolves_caller_from_env_file(monkeypatch, capsys):
+    """With no ``--caller`` and no ``PLANNER_MCP_CALLER_ID``, caller-tasks resolves
+    the caller from the kit ``.env`` (``aadId``) and uses that own OID as the
+    self-scope — so the person is never asked for their AAD id."""
     monkeypatch.delenv("PLANNER_MCP_CALLER_ID", raising=False)
-    monkeypatch.setattr(
-        roles_cli,
-        "_weve_client",
-        lambda args: _FakeCurrentUserClient({"aadId": CALLER, "displayName": "default"}),
-    )
+    monkeypatch.setattr(mcp_client, "load_adk_identity", lambda config_path: ("default", CALLER))
     client = _caller_client([{"TaskId": "t1", "Title": "Configure Workday", "State": "NotStarted"}])
     monkeypatch.setattr(roles_cli, "_attest_client", lambda args: client)
 
@@ -253,16 +193,16 @@ def test_caller_tasks_auto_resolves_caller_via_current_user(monkeypatch, capsys)
     out = capsys.readouterr().out
     assert rc == 0
     _, args = client.client.calls[-1]
-    assert args["callerId"] == CALLER  # the auto-resolved caller flowed through
+    assert args["callerId"] == CALLER  # the .env-resolved caller flowed through
     assert "Configure Workday" in out
 
 
 def test_caller_tasks_requires_a_caller(monkeypatch, capsys):
-    """No ``--caller``, no env, and ``get_current_user_context`` can't resolve one
-    → a clear self-only usage error, and NO task path is taken (the guardrail
-    returns before the task client is built)."""
+    """No ``--caller``, no env, and no ``.env`` identity → a clear self-only usage
+    error, and NO task path is taken (the guardrail returns before the task client
+    is built)."""
     monkeypatch.delenv("PLANNER_MCP_CALLER_ID", raising=False)
-    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakeCurrentUserClient({}))
+    monkeypatch.setattr(mcp_client, "load_adk_identity", lambda config_path: (None, None))
     monkeypatch.setattr(roles_cli, "_attest_client", _must_not_build)
 
     rc = roles_cli.main(["caller-tasks"])

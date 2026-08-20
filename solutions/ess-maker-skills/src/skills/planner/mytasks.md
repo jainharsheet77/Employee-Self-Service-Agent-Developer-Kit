@@ -35,8 +35,8 @@ python scripts/planner/cli.py --store mcp pull
    python scripts/planner/roles_cli.py caller-tasks
    ```
 
-   `caller-tasks` resolves the caller **automatically** via WeveNova's
-   `get_current_user_context` — so **don't ask the person for their AAD id** (or
+   `caller-tasks` resolves the caller **automatically** from the kit's `.env`
+   (`userName` + `aadId`) — so **don't ask the person for their AAD id** (or
    look up a name). `--caller` / `PLANNER_MCP_CALLER_ID` are optional overrides.
    **Don't look up or infer their roles either** — there is no client-side role
    API, and you never enumerate roles to build the query. Passing the caller id
