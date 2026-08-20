@@ -45,20 +45,30 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
 **Always begin here. Do NOT ask for the objective (or anything else) until you
 have checked for an existing plan.**
 
-**Where the plan lives — check WeveNova first when it's the backend.** If the
-project/agent being configured is backed by WeveNova (the `weve-plan` MCP server
-is configured in `.vscode/mcp.json`, or you're told to use it / `PLANNER_STORE=mcp`
-is set), the authoritative plan is **in WeveNova, not a local file**. In that case
-**fetch it first** — this is the resume for a WeveNova-backed agent:
+**Where the plan lives — always try WeveNova first.** WeveNova is the source of
+truth for the live plan, so **begin every resume by attempting the pull.** Do
+**not** gate this on whether you think the `weve-plan` backend is configured (in
+`.vscode/mcp.json`, `PLANNER_STORE=mcp`, or being told to use it) — run the command
+and let *it* tell you whether WeveNova is the backend:
 
 ```
 python scripts/planner/cli.py --store mcp pull
 ```
 
 `pull` reads the project's plan (objective/context, tasks, produced outputs,
-status) from WeveNova and writes the local `ESS-scenario-plan.md` view. If it
-returns a plan, **resume it** (below) — do not re-interview. If WeveNova has no
-plan yet for this project, fall through to "start a new one". Use `--store mcp`
+status) from WeveNova and writes the local `ESS-scenario-plan.md` view. Branch on
+what it returns:
+- **A plan with an objective and/or tasks** → **resume it** (below); do not
+  re-interview.
+- **An empty plan / "the project has no plans yet"** → WeveNova is reachable but
+  nothing's authored → fall through to "start a new one" (you'll `push` it up).
+- **An error that WeveNova is unreachable/unconfigured** (no `weve-plan` server in
+  `.vscode/mcp.json`, or the project binding can't resolve) → only *then* fall
+  back to the local `workspace/plan/plan.json` path (step 1 below).
+
+**Never conclude "there's no plan" — and never start interviewing for a new one —
+until this pull has actually run** and either returned a plan or errored; a silent
+"no WeveNova backend configured" is not a substitute for running it. Use `--store mcp`
 for **live reads** (`pull`, `summary`, the role-gated task lists) so you always
 see the current server state — **but do not run each authoring write against
 `--store mcp`.** That issues one server round-trip per field and per task (the
@@ -68,7 +78,8 @@ locally and publish the whole plan in one pass** — see *Publishing to WeveNova
 below. (If tasks are temporarily unavailable upstream, `pull` still shows the
 plan context/outputs and warns — carry on with what it returned.)
 
-1. If not WeveNova-backed, check whether a plan already exists at
+1. Only if the pull reported WeveNova is unreachable/unconfigured (the third
+   branch above), check whether a plan already exists at
    `workspace/plan/plan.json`.
 2. **If a plan exists (local file, or fetched from WeveNova), resume it — do not
    re-interview and do not ask for the objective again.**

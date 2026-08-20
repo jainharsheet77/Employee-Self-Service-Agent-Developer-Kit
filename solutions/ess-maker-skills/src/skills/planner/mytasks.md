@@ -5,6 +5,24 @@ each role they hold** — which naturally covers a person with more than one rol
 
 ## Steps
 
+**0. Fetch the live plan from WeveNova first.** "What am I assigned?" is a read of
+the *live* plan, so before anything else pull it — **even if you routed straight
+here** and think no backend is configured:
+
+```
+python scripts/planner/cli.py --store mcp pull
+```
+
+- Returns a plan → continue to step 1 (resolve roles, show tasks).
+- Returns an **empty plan / "no plans yet"** → there genuinely are no assignments
+  because no plan has been authored yet; say so and offer to **build** one (hand
+  back to the planner's plan-creation flow). Do **not** claim "no plan exists"
+  without having pulled.
+- Errors that WeveNova is unreachable/unconfigured → fall back to the local plan
+  (`summary`) and the best-effort role resolution below.
+
+**Never answer "nothing is assigned / no plan exists" until this pull has run.**
+
 1. **Find the person's roles.** The roles source is a separate, unbuilt system,
    so this is best-effort:
    - If a roles source is wired, look up the roles this person holds.
