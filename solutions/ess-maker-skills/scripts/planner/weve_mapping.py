@@ -117,6 +117,36 @@ def output_to_weve(art: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# The kinds the ``complete_project_plan_task`` tool accepts for a produced output.
+# The local ledger is richer (``ARTIFACT_KINDS``); kinds outside this enum
+# (``EntraApp``, ``Agent``) fold to ``Custom`` on the wire — the local plan keeps
+# the precise kind.
+COMPLETION_KINDS = ("Custom", "Environment", "Connection", "KnowledgeSource")
+
+
+def output_to_completion(art: dict[str, Any]) -> dict[str, Any]:
+    """Local PlanArtifact -> the **completion-output** shape required by
+    ``complete_project_plan_task`` (MCP 5.6.0). This is a *reduced, camelCase*
+    projection distinct from :func:`output_to_weve`'s plan-level PascalCase
+    ``Output``: only ``{key, kind, attributes[, inventoryRef]}`` where ``kind`` is
+    clamped to :data:`COMPLETION_KINDS` and ``attributes`` is a list of
+    ``{key, value}`` records (the tool requires a ``value`` key, so a ``None``
+    value is preserved, not dropped). Outputs are only persisted to WeveNova at
+    task completion, so this is the sole mapper that pushes them upstream."""
+    kind = art.get("kind", "") or ""
+    completion: dict[str, Any] = {
+        "key": art.get("key", ""),
+        "kind": kind if kind in COMPLETION_KINDS else "Custom",
+        "attributes": [
+            {"key": k, "value": v} for k, v in (art.get("attributes") or {}).items()
+        ],
+    }
+    inventory_ref = art.get("inventoryRef") or ""
+    if inventory_ref:
+        completion["inventoryRef"] = inventory_ref
+    return completion
+
+
 # --- tasks ------------------------------------------------------------------- #
 # WeveNova assignment is carried by two flat scalars — ``AssignedToId`` and
 # ``AssignedToRoleId`` — plus a read-only expanded ``AssignedTo`` object that

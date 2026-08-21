@@ -90,6 +90,28 @@ def test_output_round_trip_local_to_weve_to_local():
     assert back["producedByTaskId"] == "T1"
 
 
+def test_output_to_completion_shape_and_kind_clamp():
+    # The completion projection is camelCase, carries only key/kind/attributes
+    # (+ optional inventoryRef), and clamps kind to the tool's four-value enum:
+    # an in-enum kind is preserved; a local-only kind (Agent) folds to Custom.
+    env = wm.output_to_completion(plan_artifact(
+        "primaryEnvironment", "Environment",
+        {"environmentId": "e-1", "environmentUrl": "https://x"},
+        produced_by_task_id="T1", inventory_ref="Environment:e-1",
+    ))
+    assert env["key"] == "primaryEnvironment"
+    assert env["kind"] == "Environment"
+    assert env["inventoryRef"] == "Environment:e-1"
+    assert {"key": "environmentId", "value": "e-1"} in env["attributes"]
+
+    agent = wm.output_to_completion(plan_artifact(
+        "essAgent", "Agent", {"botId": "b-1"}, produced_by_task_id="T1",
+    ))
+    assert agent["kind"] == "Custom"                 # non-enum local kind folds to Custom
+    assert "inventoryRef" not in agent               # omitted when empty
+    assert agent["attributes"] == [{"key": "botId", "value": "b-1"}]
+
+
 def test_context_round_trip():
     entry = {
         "key": "market", "value": "DE", "group": "market",

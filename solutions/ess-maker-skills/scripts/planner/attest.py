@@ -305,14 +305,13 @@ class AttestationClient:
         return assigned
 
     def _reassign_task_to_person(self, task_id: str, subject_id: str, role_id: str) -> None:
-        """PATCH one pooled task to ``AssignedToType=User`` for ``subject_id``,
-        keeping ``AssignedToRoleId`` so the role grounding survives. Reads a fresh
-        ETag before the write and retries once on an ETag conflict."""
-        patch = {
-            "AssignedToType": "User",
-            "AssignedToId": subject_id,
-            "AssignedToRoleId": role_id,
-        }
+        """Claim one pooled task for ``subject_id`` by PATCHing **only**
+        ``AssignedToId`` to their AAD id — the ``update_project_plan_task`` schema
+        is additionalProperties:false and accepts assignment solely through
+        ``AssignedToId``; the grounding ``AssignedToRoleId`` stays unchanged
+        server-side (``role_id`` is kept only for the caller's reporting). Reads a
+        fresh ETag before the write and retries once on an ETag conflict."""
+        patch = {"AssignedToId": subject_id}
         ids = {"projectId": self._require_project(), "planId": self.plan_id, "taskId": task_id}
         for attempt in (1, 2):
             etag = self._task_etag(task_id)

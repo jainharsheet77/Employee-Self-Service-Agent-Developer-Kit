@@ -625,6 +625,16 @@ class Plan:
         """"This task's outputs" = the ledger filtered by producing id (no copy)."""
         return [a for a in self.outputs if a.get("producedByTaskId") == task_id]
 
+    def completion_outputs(self, task_id: str) -> list[dict[str, Any]]:
+        """The **Active** artifacts this task produced, in pinned order — the exact
+        set handed to WeveNova in the single ``complete_project_plan_task`` call
+        when the task is marked ``Completed`` (WeveNova records outputs only at
+        completion). Superseded artifacts are excluded; an empty list means the
+        task completes with no outputs (a plain state change)."""
+        return [
+            a for a in self.outputs_of_task(task_id) if a.get("state") == "Active"
+        ]
+
     def resolved_consumes(self, task_id: str) -> dict[str, Any]:
         """For each key a task consumes, the Active artifact's attributes (or
         ``None`` if not produced yet). This is how a downstream assignee learns,

@@ -318,21 +318,41 @@ class McpPlanStore:
         else:
             self.client.call_tool("create_project_plan_task", {**self._ids(), "task": body})
 
+    # The only task fields ``update_project_plan_task`` accepts as a PATCH
+    # (its schema is additionalProperties:false). Assignment is carried **only**
+    # by ``AssignedToId`` — claiming a role pool is "set AssignedToId to the user";
+    # ``AssignedToType``/``AssignedToRoleId`` are server-derived and must not be
+    # sent. ``State`` is never patched here (the state/complete tools own it).
+    _PATCHABLE_TASK_FIELDS = ("Title", "Description", "AssignedToId", "Produces", "Consumes")
+
     def _update_task(
-        self, tid: str, body: dict[str, Any], current: dict[str, Any]
+        self,
+        tid: str,
+        body: dict[str, Any],
+        current: dict[str, Any],
+        *,
+        completion_outputs: list[dict[str, Any]] | None = None,
     ) -> None:
         """Reconcile a changed task. The mutating tools require the current ETag
         as If-Match, so a single task is mutated **at most once per call where
-        possible**: a pure lifecycle change goes through
-        ``set_project_plan_task_state``; any content change is a single
-        ``update_project_plan_task`` PATCH. When *both* a content field and the
-        state changed we PATCH first, then the state helper directly re-reads the
-        task before the second mutation. Every mutation uses a direct entity GET;
-        list-response ETags are used only for change detection, never If-Match."""
+        possible**: a content change is a single ``update_project_plan_task``
+        PATCH (restricted to the schema-allowed fields); a lifecycle change goes
+        through ``set_project_plan_task_state`` — **except** a transition to
+        ``Completed`` for a task that produced outputs, which goes through
+        ``complete_project_plan_task`` so the outputs are persisted with the same
+        call (WeveNova only records outputs at completion). When *both* a content
+        field and the state changed we PATCH first, then the state/complete helper
+        directly re-reads the task before the second mutation. Every mutation uses
+        a direct entity GET; list-response ETags are used only for change
+        detection, never If-Match."""
         state_changed = body.get("State") != current.get("State")
-        non_state = {k: v for k, v in body.items() if k != "State"}
-        cur_non_state = {k: v for k, v in current.items() if k != "State"}
-        fields_changed = non_state != cur_non_state
+        # Only the schema-allowed writable fields participate in the content PATCH;
+        # send just the ones that actually changed (an empty diff -> no PATCH).
+        patch = {
+            k: body[k]
+            for k in self._PATCHABLE_TASK_FIELDS
+            if k in body and body.get(k) != current.get(k)
+        }
 
         desired_state = body.get("State", "NotStarted")
         if state_changed:
@@ -345,18 +365,31 @@ class McpPlanStore:
             # half-applied content+state update.
             self._require_active_plan()
 
-        if fields_changed:
-            self._mutate_task(
-                "update_project_plan_task",
-                tid,
-                {"patch": non_state},
-            )
+        if patch:
+            self._mutate_task("update_project_plan_task", tid, {"patch": patch})
         if state_changed:
-            self._mutate_task(
-                "set_project_plan_task_state",
-                tid,
-                {"state": desired_state},
-            )
+            if desired_state == "Completed" and completion_outputs:
+                self._complete_task_with_outputs(tid, completion_outputs)
+            else:
+                self._mutate_task(
+                    "set_project_plan_task_state", tid, {"state": desired_state}
+                )
+
+    def _complete_task_with_outputs(
+        self, tid: str, outputs: list[dict[str, Any]]
+    ) -> None:
+        """Complete a task **and persist its produced outputs in one bulk call**
+        (``complete_project_plan_task`` carries the full outputs array — one call,
+        not one per output, mirroring how plan context is pushed in a single
+        ``update_project_plan``). WeveNova completes only from ``InProgress``, so a
+        ``NotStarted`` task is moved to ``InProgress`` first (state-only). Each
+        mutation reads the task's fresh direct ETag; an ETag conflict is retried
+        once (via :meth:`_mutate_task`)."""
+        current = self._get_task_raw(tid)
+        state = current.get("State") or current.get("state") or "NotStarted"
+        if state == "NotStarted":
+            self._mutate_task("set_project_plan_task_state", tid, {"state": "InProgress"})
+        self._mutate_task("complete_project_plan_task", tid, {"outputs": outputs})
 
     def _reconcile_plan_fields(self, plan: Plan) -> list[str]:
         """Push the plan-level **Context + AcceptanceCriteria** to WeveNova when
@@ -419,7 +452,19 @@ class McpPlanStore:
                             wm.task_from_weve(direct), include_id=False
                         )
                         if body != current:
-                            self._update_task(tid, body, current)
+                            # A task going Completed carries its produced outputs
+                            # (Active only) so completion persists them upstream in
+                            # one bulk call; WeveNova records outputs only here.
+                            completion_outputs = (
+                                [wm.output_to_completion(a)
+                                 for a in plan.completion_outputs(tid)]
+                                if body.get("State") == "Completed"
+                                else None
+                            )
+                            self._update_task(
+                                tid, body, current,
+                                completion_outputs=completion_outputs,
+                            )
                 else:
                     self._create_task(body)
             for stale in set(server) - local_ids:
@@ -431,11 +476,20 @@ class McpPlanStore:
         # push them when they differ from the server (a no-op when unchanged).
         notices.extend(self._reconcile_plan_fields(plan))
 
-        if plan.outputs:
+        # Outputs reach WeveNova only when their producing task completes (carried
+        # by the completion call above), so surface any Active output still held
+        # locally because its producer isn't Completed yet.
+        pending = 0
+        for art in plan.outputs:
+            if art.get("state") != "Active":
+                continue
+            producer = plan.task(art.get("producedByTaskId", ""))
+            if producer is None or producer.get("state") != "Completed":
+                pending += 1
+        if pending:
             notices.append(
-                f"{len(plan.outputs)} pinned output(s) are shown in the plan view but "
-                "are owned by WeveNova upstream (recorded when a task completes, not "
-                "pushed by this sync)."
+                f"{pending} pinned output(s) are held locally and will be pushed to "
+                "WeveNova when their producing task is marked Completed."
             )
 
         # WeveNova is the source of truth: render the human view (and refresh the

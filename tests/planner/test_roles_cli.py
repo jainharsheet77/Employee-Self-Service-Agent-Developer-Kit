@@ -157,11 +157,9 @@ def test_attest_assigns_only_the_roles_open_pool(monkeypatch, capsys):
     assert len(patched) == 1                            # only the WorkdayAdmin *pool*
     tid, patch = patched[0]
     assert tid == "t-wd"                                # not t-env (other role), not t-wd2 (owned)
-    assert patch == {
-        "AssignedToType": "User",
-        "AssignedToId": SUBJECT,
-        "AssignedToRoleId": "WorkdayAdmin",             # grounding role retained
-    }
+    # Claim carries ONLY AssignedToId (schema is additionalProperties:false);
+    # AssignedToRoleId stays unchanged server-side.
+    assert patch == {"AssignedToId": SUBJECT}
     assert "Configure the Workday tenant" in out
 
 

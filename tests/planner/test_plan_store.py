@@ -19,7 +19,7 @@ import pytest
 
 from planner import weve_mapping as wm
 from planner.mcp_client import McpError
-from planner.plan_model import Plan, new_task, principal_pool
+from planner.plan_model import Plan, new_task, plan_artifact, principal_pool
 from planner.plan_store import (
     LocalPlanStore,
     McpPlanStore,
@@ -167,6 +167,29 @@ class FakeWeveClient:
                 "TaskId": tid, "ETag": self._bump_etag(),
             }
             return self.tasks[tid]
+        if name == "complete_project_plan_task":
+            tid = arguments["taskId"]
+            self._check_etag(tid, arguments)
+            self.tasks[tid] = {
+                **self.tasks.get(tid, {}), "State": "Completed",
+                "TaskId": tid, "ETag": self._bump_etag(),
+            }
+            # WeveNova records the produced outputs on the plan ledger at completion.
+            outs = self.plan_doc.setdefault("Outputs", [])
+            for o in arguments.get("outputs", []) or []:
+                outs.append({
+                    "Key": o.get("key"),
+                    "Kind": o.get("kind"),
+                    "ProducedByTaskId": tid,
+                    "State": "Active",
+                    "InventoryRef": o.get("inventoryRef", ""),
+                    "Attributes": [
+                        {"Key": a["key"], "Value": a.get("value")}
+                        for a in o.get("attributes", []) or []
+                    ],
+                })
+            self.plan_doc["ETag"] = self._bump_etag()
+            return self.tasks[tid]
         if name == "delete_project_plan_task":
             self._check_etag(arguments["taskId"], arguments)
             self.tasks.pop(arguments["taskId"], None)
@@ -265,7 +288,9 @@ def test_mcp_store_save_creates_new_task(tmp_path):
     assert created["Title"] == "Run setup"
     assert created["AssignedToRoleId"] == "Environment Maker"
     assert os.path.exists(store.summary_path)          # .md still rendered
-    assert any("owned by WeveNova" in n for n in notices)  # outputs read-only notice
+    # The fixture's output isn't produced by a Completed task, so it's held
+    # locally until its producer completes (pushed then via complete_project_plan_task).
+    assert any("held locally" in n for n in notices)
 
 
 def test_mcp_store_save_creates_plain_user_task(tmp_path):
@@ -355,6 +380,62 @@ def test_mcp_store_save_title_and_state_change_reads_fresh_etag(tmp_path):
     assert "set_project_plan_task_state" in client.calls
     assert client.tasks["keep"]["Title"] == "New"
     assert client.tasks["keep"]["State"] == "Completed"
+
+
+def test_mcp_store_save_completes_task_with_outputs_in_one_bulk_call(tmp_path):
+    # A task going Completed that produced outputs is finished through
+    # complete_project_plan_task, which carries ALL its Active outputs in a single
+    # (bulk) call — NOT set_project_plan_task_state, and not one call per output.
+    server_task = wm.task_to_weve(
+        new_task("setup", "Run setup", assigned_to=principal_pool("Environment Maker"),
+                 produces=["primaryEnvironment"]),
+        include_id=True,
+    )
+    client = FakeWeveClient(_fixture_doc(), tasks=[server_task])
+    client.plan_doc["Status"] = "Active"
+    store = _mcp_store(client, str(tmp_path / "plan.md"))
+    plan = store.load()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment",
+        {"environmentId": "env-1", "environmentUrl": "https://org.crm.dynamics.com"},
+        produced_by_task_id="setup",
+    ))
+    task = next(t for t in plan.tasks if t["id"] == "setup")
+    task["state"] = "Completed"
+    client.calls.clear()
+    store.save(plan)
+
+    completes = [a for (n, a) in client.call_log if n == "complete_project_plan_task"]
+    assert len(completes) == 1                                  # bulk: exactly one call
+    outs = completes[0]["outputs"]
+    assert [o["key"] for o in outs] == ["primaryEnvironment"]   # all outputs in that one call
+    assert outs[0]["kind"] == "Environment"                     # completion enum shape
+    assert {"key": "environmentId", "value": "env-1"} in outs[0]["attributes"]
+    assert completes[0].get("etag")                             # If-Match carried
+    # NotStarted must move to InProgress before completing; never a Completed set-state.
+    states = [a["state"] for (n, a) in client.call_log if n == "set_project_plan_task_state"]
+    assert states == ["InProgress"]
+    assert client.tasks["setup"]["State"] == "Completed"
+    # WeveNova recorded the output on the plan ledger at completion.
+    assert any(o.get("Key") == "primaryEnvironment" for o in client.plan_doc.get("Outputs", []))
+
+
+def test_mcp_store_save_completed_without_outputs_uses_state_tool(tmp_path):
+    # A task with no produced outputs still completes through the plain state tool.
+    server_task = wm.task_to_weve(
+        new_task("t", "No outputs", assigned_to=principal_pool("WorkdayAdmin")),
+        include_id=True,
+    )
+    client = FakeWeveClient(_fixture_doc(), tasks=[server_task])
+    client.plan_doc["Status"] = "Active"
+    store = _mcp_store(client, str(tmp_path / "plan.md"))
+    plan = store.load()
+    next(t for t in plan.tasks if t["id"] == "t")["state"] = "Completed"
+    client.calls.clear()
+    store.save(plan)
+    assert "complete_project_plan_task" not in client.calls
+    states = [a["state"] for (n, a) in client.call_log if n == "set_project_plan_task_state"]
+    assert states == ["Completed"]
 
 
 def test_mcp_store_save_updates_existing_task(tmp_path):
