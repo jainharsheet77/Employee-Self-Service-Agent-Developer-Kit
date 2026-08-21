@@ -111,6 +111,19 @@ same for every plan and matches the WeveNova registry, while the Learn page stay
 the grounding anchor. Confirm the exact split from that skill's checklist; never
 assume it.
 
+**The converse — a _single-role_ skill is exactly one Task.** When every step a
+kit skill runs is gated to the **same** role, do **not** decompose it: emit a
+single "run `/<skill>`" Task for that role. Its **description** carries what the
+skill accomplishes (grounded from Learn) and the command to run — *just run
+`/setup`* — plus a pointer to the skill, so anyone who asks *what* it does gets the
+Learn-sourced answer while the skill itself owns the step-by-step. Splitting a
+single-role skill into several **same-role** Tasks — e.g. a separate "provision the
+environment" **and** "run setup" when `/setup` already provisions the environment as
+its own first step (`setup/workday/provision-power-platform-environment.md`) — is
+splitting by *step*, not by *role*, and is exactly what this rule forbids.
+**Classify each kit skill in the research phase (§1) by reading its role map: one
+role → one Task; many roles → one Task per role.**
+
 ## Typical greenfield backbone
 
 The "how" is the **description** (say which command to run in prose); `produces`/
@@ -149,12 +162,17 @@ the topics/knowledge task, not a connect task.
 ## First step for a first-time / greenfield rollout
 
 The first task is almost always the **Power Platform admin running `/setup`**.
-Be accurate about what `/setup` (onboarding) does: it **connects the kit to an
-ESS agent that is already deployed in a Power Platform environment and records
-its details** — it does *not* create the environment or install ESS. For a
-brand-new tenant, provisioning the environment and installing the ESS agent are
-**portal/admin prerequisites**; add a task described as a portal/admin step before
-`/setup` if they don't exist yet.
+`/setup` is a **single Power Platform Administrator Task** even though it does a
+lot: its first steps **verify or create** the Power Platform environment +
+Dataverse and confirm Copilot Studio capacity
+(`setup/workday/provision-power-platform-environment.md`), then record the
+environment and clone the agent into the workspace
+(`--produces primaryEnvironment,essAgent`). Because provisioning is `/setup`'s own
+first step, **do not emit a separate "provision the environment" Task ahead of it
+for the Power Platform Administrator** — the one "run `/setup`" Task covers it
+(single-role rule above). Only carve a step out into its own Task when a
+**different** role owns it — e.g. the base ESS agent install (`Environment Maker`,
+`install-ess.md`) or the multi-role Workday split (SSO, tenant, connect, firewall).
 
 ## Back-propagation — how the admin's setup details flow to later tasks
 
