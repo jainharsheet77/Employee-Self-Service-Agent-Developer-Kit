@@ -143,6 +143,14 @@ find-users ──┘  (name ─► aadId; temporary Work IQ stand-in)
 - Omit `--etag` for a first attestation. If converging an existing assignment,
   use only that assignment's strong ETag; never pass the plan's weak `W/"..."`
   ETag.
+- **Attesting also hands the person the role's open pooled work.** After a verified
+  attestation, `attest` reassigns every task still sitting in that role's **open
+  pool** to the person (patched to `AssignedToType=User`, the grounding role kept),
+  so they don't have to `claim` each one and the pool doesn't sit unowned. It never
+  touches a task already owned by someone else (a second holder attested later just
+  finds an empty pool), and it reports how many it moved. Pass `--no-assign-tasks`
+  to attest *only* and leave the pool untouched. This is why, right after attesting
+  someone, their `caller-tasks` already lists that role's work.
 
 The plan binding (project/plan/tenant) resolves from `--project-id`/`--plan-id`,
 the `PLANNER_MCP_*` env vars, or discovery. If the plan can't be reached, the CLI

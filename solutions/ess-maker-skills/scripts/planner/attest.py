@@ -260,6 +260,95 @@ class AttestationClient:
             raise AttestationError(f"revoke role assignment failed: {exc}") from exc
         return result if isinstance(result, dict) else {"result": result}
 
+    # -- hand the role's pooled tasks to the newly-attested person ------- #
+
+    def assign_role_pool_to_subject(
+        self, subject_id: str, role_id: str
+    ) -> list[dict[str, Any]]:
+        """After attesting ``subject_id`` to ``role_id``, hand them the role's
+        still-**open pooled** tasks on this plan (pool → claimed; the grounding
+        role is retained so the task still groups under it in Flow 2).
+
+        Only tasks that are an **open role pool** grounded on *exactly* this role
+        are taken. A task already owned by a person (even one grounded on the same
+        role) is left untouched, so an existing owner is never displaced and a
+        second holder attested later simply finds an empty pool. Returns the tasks
+        reassigned (``{TaskId, Title}``); an empty list means nothing was pooled
+        for the role.
+
+        Each mutation reads the task's current ETag from a direct GET immediately
+        before the ``update_project_plan_task`` PATCH (WeveNova requires If-Match);
+        an ETag conflict is re-read and retried once."""
+        from planner import weve_mapping as wm
+        from planner.plan_model import assignee_role_id
+
+        args: dict[str, Any] = {"projectId": self._require_project(), "planId": self.plan_id}
+        try:
+            payload = self.client.call_tool("list_project_plan_tasks", args)
+        except McpError as exc:
+            raise AttestationError(
+                f"attested, but could not list tasks to assign the role's pool: {exc}"
+            ) from exc
+
+        assigned: list[dict[str, Any]] = []
+        for raw in _odata_items(payload):
+            local = wm.task_from_weve(raw)
+            who = local.get("assignedTo") or {}
+            # Open pool for *this* role only — never touch a person-owned task.
+            if who.get("type") != "Role" or assignee_role_id(who) != role_id:
+                continue
+            tid = local.get("id")
+            if not tid:
+                continue
+            self._reassign_task_to_person(tid, subject_id, role_id)
+            assigned.append({"TaskId": tid, "Title": local.get("title", "")})
+        return assigned
+
+    def _reassign_task_to_person(self, task_id: str, subject_id: str, role_id: str) -> None:
+        """PATCH one pooled task to ``AssignedToType=User`` for ``subject_id``,
+        keeping ``AssignedToRoleId`` so the role grounding survives. Reads a fresh
+        ETag before the write and retries once on an ETag conflict."""
+        patch = {
+            "AssignedToType": "User",
+            "AssignedToId": subject_id,
+            "AssignedToRoleId": role_id,
+        }
+        ids = {"projectId": self._require_project(), "planId": self.plan_id, "taskId": task_id}
+        for attempt in (1, 2):
+            etag = self._task_etag(task_id)
+            try:
+                self.client.call_tool(
+                    "update_project_plan_task", {**ids, "patch": patch, "etag": etag}
+                )
+                return
+            except McpError as exc:
+                if attempt == 1 and _is_etag_conflict(exc):
+                    continue
+                raise AttestationError(
+                    f"attested, but could not assign task {task_id} to the person: {exc}"
+                ) from exc
+
+    def _task_etag(self, task_id: str) -> str:
+        """The current strong ETag of a task, from its direct GET (used as
+        If-Match on the very next mutation — never a list-response ETag)."""
+        try:
+            cur = self.client.call_tool(
+                "get_project_plan_task",
+                {"projectId": self._require_project(), "planId": self.plan_id, "taskId": task_id},
+            )
+        except McpError as exc:
+            raise AttestationError(
+                f"attested, but could not read task {task_id} to assign it: {exc}"
+            ) from exc
+        etag = None
+        if isinstance(cur, dict):
+            etag = cur.get("ETag") or cur.get("etag") or cur.get("@odata.etag")
+        if not etag:
+            raise AttestationError(
+                f"attested, but task {task_id} returned no ETag; refusing an unsafe assign."
+            )
+        return etag
+
     # -- caller tasks (Flow 2) ------------------------------------------- #
 
     def tasks_for_caller(
@@ -312,3 +401,14 @@ def _odata_items(payload: Any) -> list[dict[str, Any]]:
     else:
         items = []
     return [i for i in items if isinstance(i, dict)]
+
+
+def _is_etag_conflict(exc: McpError) -> bool:
+    """True when a mutation failed the If-Match precondition (a stale ETag),
+    which is safe to re-read and retry once — as opposed to a lifecycle refusal."""
+    text = str(exc).casefold()
+    return (
+        "preconditionfailed" in text
+        or "precondition failed" in text
+        or ("etag" in text and ("conflict" in text or "if-match" in text))
+    )

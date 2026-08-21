@@ -218,6 +218,25 @@ def cmd_attest(args: argparse.Namespace) -> int:
     else:
         aid = rec.get("AssignmentId") or rec.get("Id") or "?"
         print(f"Attested {args.person} to {rec.get('Role', args.role)} (assignment {aid}).")
+
+    # A person attested to a role should also *own* that role's waiting work, so
+    # its open pool doesn't sit unclaimed. Hand them the role's still-pooled tasks
+    # (role grounding retained). This never displaces a task already owned by
+    # someone. Assignment trouble is a soft warning — the attestation itself stood.
+    if getattr(args, "assign_tasks", True):
+        role_id = rec.get("Role", args.role)
+        try:
+            assigned = client.assign_role_pool_to_subject(args.person, role_id)
+        except AttestationError as exc:
+            print(f"note: {exc}", file=sys.stderr)
+        else:
+            if not args.json:
+                if assigned:
+                    print(f"Assigned {len(assigned)} pooled {role_id} task(s) to them:")
+                    for t in assigned:
+                        print(f"    - {t.get('Title') or t.get('TaskId')}")
+                else:
+                    print(f"No open {role_id} tasks were waiting in the pool to assign.")
     return 0
 
 
@@ -339,6 +358,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--role", required=True, help="an attestable role (id or display name; see `roles`)")
     p.add_argument("--provider", help="the role's owner (External/Entra/PowerPlatform); derived when omitted")
     p.add_argument("--idempotency-key", dest="idempotency_key", help="optional idempotency key for replay-safe attest")
+    p.add_argument(
+        "--no-assign-tasks",
+        dest="assign_tasks",
+        action="store_false",
+        help="attest only; do NOT hand the role's open pooled tasks to the person "
+             "(by default a successful attest also claims them for that person)",
+    )
     p.add_argument(
         "--etag",
         help="existing role assignment's strong ETag only; omit for first attestation",

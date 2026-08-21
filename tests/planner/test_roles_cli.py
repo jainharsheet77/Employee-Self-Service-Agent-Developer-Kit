@@ -22,29 +22,70 @@ SUBJECT = "11111111-2222-3333-4444-555555555555"
 
 
 class _FakeToolClient:
-    """Minimal MCP tool emulation for the attest path."""
+    """Minimal MCP tool emulation for the attest path, including the plan's tasks
+    so the post-attest pool-assignment can be exercised end to end."""
 
-    def __init__(self) -> None:
+    def __init__(self, tasks=None) -> None:
         self.calls: list[tuple[str, dict]] = []
+        # keyed by TaskId; each holds the raw WeveNova task shape + an ETag
+        self.tasks: dict[str, dict] = {t["TaskId"]: dict(t) for t in (tasks or [])}
 
     def call_tool(self, name, arguments=None):
-        self.calls.append((name, arguments or {}))
+        arguments = arguments or {}
+        self.calls.append((name, arguments))
         if name == "attest_plan_role":
             return {
                 "AssignmentId": "assign-1",
-                "Role": (arguments or {})["role"],
-                "SubjectId": (arguments or {})["subjectId"],
+                "Role": arguments["role"],
+                "SubjectId": arguments["subjectId"],
                 "Status": "Active",
             }
         if name == "list_plan_role_assignments":
             # the post-attest verification readback — surface the Active grant
             return {"value": [{
                 "AssignmentId": "assign-1",
-                "Role": (arguments or {}).get("role", "WorkdayAdmin"),
-                "SubjectId": (arguments or {}).get("subjectId", SUBJECT),
+                "Role": arguments.get("role", "WorkdayAdmin"),
+                "SubjectId": arguments.get("subjectId", SUBJECT),
                 "Status": "Active",
             }]}
+        if name == "list_project_plan_tasks":
+            return {"value": [dict(t) for t in self.tasks.values()]}
+        if name == "get_project_plan_task":
+            return dict(self.tasks[arguments["taskId"]])
+        if name == "update_project_plan_task":
+            tid = arguments["taskId"]
+            task = self.tasks[tid]
+            if arguments.get("etag") != task.get("ETag"):
+                raise McpError(f"PreconditionFailed: stale ETag for {tid}")
+            task.update(arguments.get("patch") or {})
+            task["ETag"] = task["ETag"] + "'"  # a fresh ETag after the write
+            return dict(task)
         raise McpError(f"unexpected tool {name}")
+
+
+OTHER = "99999999-8888-7777-6666-555555555555"
+
+
+def _pooled_task(task_id, title, role):
+    return {
+        "TaskId": task_id,
+        "Title": title,
+        "AssignedToRoleId": role,
+        "AssignedToId": role,  # a pooled task's AssignedToId equals its role
+        "AssignedTo": {"Type": "Role", "Id": role, "Role": {"RoleId": role}},
+        "ETag": "W/\"1\"",
+    }
+
+
+def _owned_task(task_id, title, role, oid):
+    return {
+        "TaskId": task_id,
+        "Title": title,
+        "AssignedToRoleId": role,
+        "AssignedToId": oid,
+        "AssignedTo": {"Type": "User", "Id": oid, "Role": {"RoleId": role}},
+        "ETag": "W/\"1\"",
+    }
 
 
 def test_parser_wires_role_commands():
@@ -94,6 +135,66 @@ def test_attest_threads_person_and_role(monkeypatch, capsys):
     assert args["provider"] == "External"
     assert args["subjectId"] == SUBJECT
     assert "Attested" in out
+
+
+def test_attest_assigns_only_the_roles_open_pool(monkeypatch, capsys):
+    """A verified attest also hands the person the role's still-open pooled tasks
+    (patched to User, role retained) — never a different role's pool, and never a
+    task already owned by someone else."""
+    fake = _FakeToolClient([
+        _pooled_task("t-wd", "Configure the Workday tenant", "WorkdayAdmin"),
+        _pooled_task("t-env", "Install the ESS agent", "Environment Maker"),
+        _owned_task("t-wd2", "Set up Workday SSO", "WorkdayAdmin", OTHER),
+    ])
+    client = AttestationClient(fake, plan_id=PLAN, tenant_id=TENANT, project_id=PROJECT)
+    monkeypatch.setattr(roles_cli, "_attest_client", lambda args: client)
+
+    rc = roles_cli.main(["attest", "--person", SUBJECT, "--role", "WorkdayAdmin"])
+    out = capsys.readouterr().out
+    assert rc == 0
+
+    patched = [(a["taskId"], a["patch"]) for (n, a) in fake.calls if n == "update_project_plan_task"]
+    assert len(patched) == 1                            # only the WorkdayAdmin *pool*
+    tid, patch = patched[0]
+    assert tid == "t-wd"                                # not t-env (other role), not t-wd2 (owned)
+    assert patch == {
+        "AssignedToType": "User",
+        "AssignedToId": SUBJECT,
+        "AssignedToRoleId": "WorkdayAdmin",             # grounding role retained
+    }
+    assert "Configure the Workday tenant" in out
+
+
+def test_attest_reports_when_pool_is_empty(monkeypatch, capsys):
+    """Attesting a role with nothing waiting in its pool says so and writes nothing."""
+    fake = _FakeToolClient([
+        _owned_task("t-wd2", "Set up Workday SSO", "WorkdayAdmin", OTHER),
+    ])
+    client = AttestationClient(fake, plan_id=PLAN, tenant_id=TENANT, project_id=PROJECT)
+    monkeypatch.setattr(roles_cli, "_attest_client", lambda args: client)
+
+    rc = roles_cli.main(["attest", "--person", SUBJECT, "--role", "WorkdayAdmin"])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert not [c for c in fake.calls if c[0] == "update_project_plan_task"]
+    assert "No open WorkdayAdmin tasks" in out
+
+
+def test_attest_no_assign_tasks_flag_skips_the_pool(monkeypatch, capsys):
+    """``--no-assign-tasks`` attests only — the role's pool is left untouched."""
+    fake = _FakeToolClient([
+        _pooled_task("t-wd", "Configure the Workday tenant", "WorkdayAdmin"),
+    ])
+    client = AttestationClient(fake, plan_id=PLAN, tenant_id=TENANT, project_id=PROJECT)
+    monkeypatch.setattr(roles_cli, "_attest_client", lambda args: client)
+
+    rc = roles_cli.main(
+        ["attest", "--person", SUBJECT, "--role", "WorkdayAdmin", "--no-assign-tasks"]
+    )
+    assert rc == 0
+    # the task path is never entered at all
+    assert not [c for c in fake.calls if c[0] in
+                ("list_project_plan_tasks", "update_project_plan_task")]
 
 
 def test_attest_rejects_non_attestable_role(monkeypatch, capsys):
