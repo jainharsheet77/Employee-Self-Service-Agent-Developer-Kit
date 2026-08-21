@@ -79,6 +79,10 @@ class FakeWeveClient:
         self._etag_seq += 1
         return f'W/"{self._etag_seq}"'
 
+    def lifecycle_rules(self) -> dict:
+        """The live lifecycle/concurrency contract the store loads once on init."""
+        return {"planActivationRule": "Only the plan resource owner may activate it."}
+
     def call_tool(self, name: str, arguments=None):
         arguments = arguments or {}
         self.calls.append(name)
@@ -319,6 +323,7 @@ def test_mcp_store_save_state_change_uses_state_tool(tmp_path):
     server_task = wm.task_to_weve(new_task("keep", "Same", assigned_to=principal_pool("WorkdayAdmin")),
                                   include_id=True)
     client = FakeWeveClient(_fixture_doc(), tasks=[server_task])
+    client.plan_doc["Status"] = "Active"        # task-state changes require an Active plan
     store = _mcp_store(client, str(tmp_path / "plan.md"))
     plan = store.load()
     task = next(t for t in plan.tasks if t["id"] == "keep")
@@ -337,6 +342,7 @@ def test_mcp_store_save_title_and_state_change_reads_fresh_etag(tmp_path):
     server_task = wm.task_to_weve(new_task("keep", "Old", assigned_to=principal_pool("WorkdayAdmin")),
                                   include_id=True)
     client = FakeWeveClient(_fixture_doc(), tasks=[server_task])
+    client.plan_doc["Status"] = "Active"        # task-state changes require an Active plan
     store = _mcp_store(client, str(tmp_path / "plan.md"))
     plan = store.load()
     task = next(t for t in plan.tasks if t["id"] == "keep")
@@ -386,6 +392,8 @@ def test_mcp_store_load_degrades_when_tasks_unavailable(tmp_path):
     class TasksDown:
         def __init__(self, doc):
             self.doc = doc
+        def lifecycle_rules(self):
+            return {}
         def call_tool(self, name, arguments=None):
             if name == "get_project_plan":
                 return self.doc
@@ -400,6 +408,8 @@ def test_mcp_store_load_degrades_when_tasks_unavailable(tmp_path):
 
 def test_mcp_store_load_raises_when_plan_unreadable(tmp_path):
     class PlanDown:
+        def lifecycle_rules(self):
+            return {}
         def call_tool(self, name, arguments=None):
             raise McpError("Upstream GET ... returned 503")
 

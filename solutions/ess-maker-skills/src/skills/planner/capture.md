@@ -95,8 +95,11 @@ they read the `environmentId` from the summary/plan rather than hunting for it.
 
 ## Progress
 
+- With `--store mcp`, confirm the WeveNova plan is **Active** before starting,
+  completing, or cancelling a task. If it is Draft, stop and have the plan
+  resource owner activate it; do not retry the task mutation as an ETag conflict.
 - Advance Task state as work happens:
-  `python scripts/planner/cli.py set-state --task <T#> --state InProgress|Completed`.
+  `python scripts/planner/cli.py set-state --task <T#> --state InProgress|Completed|Cancelled`.
 - Completing a Task whose `produces` keys are now pinned can unblock downstream
   Tasks that `consume` them — point that out to the sponsor.
 - Show `python scripts/planner/cli.py summary` so "where are we" is answerable

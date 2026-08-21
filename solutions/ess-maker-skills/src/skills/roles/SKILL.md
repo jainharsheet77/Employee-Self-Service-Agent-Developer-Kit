@@ -80,8 +80,6 @@ python scripts/planner/roles_cli.py attest --person <aadId> --role "Power Platfo
 - `find-users` is WeveNova's people search (`find_users_by_name`) — a **temporary
   stand-in for Work IQ**; it will be swapped for Work IQ once available (same seam,
   same `aadId` result), so treat it as the name→id resolver, not a permanent API.
-- If the result carries a **`warning`** (the live directory was unavailable and the
-  match came from the demo cache), caveat the match instead of trusting it blindly.
 - If nothing matches, ask the maker to confirm the spelling — **never fabricate an
   `aadId`**.
 - Any id it returns is an **authoring-time** lookup, never a runtime dependency of
@@ -139,8 +137,12 @@ find-users ──┘  (name ─► aadId; temporary Work IQ stand-in)
   (`WorkdayAdmin`→External, `Global Administrator`→Entra, `Environment Maker`→
   PowerPlatform). Pass `--provider` only to override; it must own the role.
 - Attestations are **plan-scoped** and **idempotent** — re-attesting the same
-  person↔role returns the existing record. Report it in plain language ("Recorded
-  Alex Lopez as the Workday Administrator for this rollout.").
+  person↔role returns the existing record. The CLI verifies a matching Active
+  assignment with `list_plan_role_assignments` before reporting success. Never
+  report success from the POST response alone.
+- Omit `--etag` for a first attestation. If converging an existing assignment,
+  use only that assignment's strong ETag; never pass the plan's weak `W/"..."`
+  ETag.
 
 The plan binding (project/plan/tenant) resolves from `--project-id`/`--plan-id`,
 the `PLANNER_MCP_*` env vars, or discovery. If the plan can't be reached, the CLI

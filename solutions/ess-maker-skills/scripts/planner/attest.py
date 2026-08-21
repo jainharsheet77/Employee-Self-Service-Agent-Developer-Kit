@@ -159,6 +159,11 @@ class AttestationClient:
         and the provider is derived/checked before the call. Idempotent — the
         server returns the existing assignment when the deterministic one already
         exists."""
+        if etag and etag.strip().startswith("W/"):
+            raise AttestationError(
+                "attestation etag must be an existing role assignment's strong "
+                "ETag. Omit it for a first attestation; never pass the plan ETag."
+            )
         role_id, prov = validate_attestation(subject_id, role, provider, registry=self.registry)
         args: dict[str, Any] = {
             "tenantId": self._require_tenant(),
@@ -175,7 +180,22 @@ class AttestationClient:
             result = self.client.call_tool("attest_plan_role", args)
         except McpError as exc:
             raise AttestationError(f"attest failed: {exc}") from exc
-        return result if isinstance(result, dict) else {"result": result}
+        record = result if isinstance(result, dict) else {"result": result}
+        try:
+            verified = self.list_assignments(
+                subject_id=subject_id.strip(), role=role_id, status="Active"
+            )
+        except AttestationError as exc:
+            raise AttestationError(
+                "attestation response returned, but persistence could not be "
+                f"verified; do not report success or retry blindly: {exc}"
+            ) from exc
+        if not verified:
+            raise AttestationError(
+                "attestation response returned, but no matching Active assignment "
+                "was found. Do not report the role as assigned."
+            )
+        return {**verified[0], **record}
 
     def list_assignments(
         self,
@@ -220,9 +240,20 @@ class AttestationClient:
 
     def revoke(self, assignment_id: str, *, etag: str | None = None) -> dict[str, Any]:
         """Revoke (soft-revoke) a role assignment on this plan."""
+        if not etag:
+            current = self.get_assignment(assignment_id)
+            etag = (
+                current.get("ETag")
+                or current.get("etag")
+                or current.get("@odata.etag")
+            )
+        if not etag:
+            raise AttestationError(
+                "the current role assignment read returned no ETag; refusing an "
+                "unsafe revoke."
+            )
         args: dict[str, Any] = {"tenantId": self._require_tenant(), "assignmentId": assignment_id}
-        if etag:
-            args["etag"] = etag
+        args["etag"] = etag
         try:
             result = self.client.call_tool("revoke_role_assignment", args)
         except McpError as exc:

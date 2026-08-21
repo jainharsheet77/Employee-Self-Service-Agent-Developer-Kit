@@ -42,6 +42,7 @@ from planner.plan_model import (
     SCENARIO_GROUP,
     Plan,
     new_task,
+    order_tasks_by_dependency,
     plan_artifact,
     principal_person,
     principal_pool,
@@ -462,6 +463,11 @@ def cmd_mine(args: argparse.Namespace) -> int:
         return 0
     print(f"You hold {len(grouped)} role(s) with tasks:\n")
     for role, items in grouped.items():
+        # Within each role, order producers ahead of the tasks that consume what
+        # they produce; independent tasks keep their Learn order.
+        ordered = order_tasks_by_dependency([it["task"] for it in items])
+        rank = {id(t): i for i, t in enumerate(ordered)}
+        items = sorted(items, key=lambda it: rank[id(it["task"])])
         print(f"[{role}]")
         for item in items:
             task = item["task"]
@@ -627,6 +633,24 @@ def cmd_push(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_activate(args: argparse.Namespace) -> int:
+    """Activate the bound WeveNova plan using the current owner's identity."""
+    from planner.plan_store import McpPlanStore, PlanStoreError
+
+    store = _store(args)
+    if not isinstance(store, McpPlanStore):
+        raise SystemExit("activate requires --store mcp (or PLANNER_STORE=mcp).")
+    try:
+        plan = store.activate()
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot activate the plan: {exc}")
+    print(
+        f"Plan {store.plan_id} is {plan.get('Status', plan.get('status', 'Active'))} "
+        f"(ETag {plan.get('ETag', plan.get('etag', '?'))})."
+    )
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     plan = _load(args)
     errors = plan.validate()
@@ -730,7 +754,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("set-state", help="set a task's state")
     p.add_argument("--task", required=True)
-    p.add_argument("--state", required=True, choices=["NotStarted", "InProgress", "Completed", "Blocked"])
+    p.add_argument(
+        "--state",
+        required=True,
+        choices=["NotStarted", "InProgress", "Completed", "Cancelled"],
+    )
     p.set_defaults(func=cmd_set_state)
 
     p = sub.add_parser("capture-setup", help="observe /setup output and pin every id+name artifact in config.json")
@@ -787,6 +815,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("push", help="push the whole local plan.json to WeveNova in one pass (bulk counterpart to pull); --force overwrites an existing plan")
     p.add_argument("--force", action="store_true", help="reconcile over an existing WeveNova plan (deletes upstream tasks absent locally)")
     p.set_defaults(func=cmd_push)
+
+    p = sub.add_parser(
+        "activate",
+        help="activate the bound WeveNova plan as its resource owner before task execution",
+    )
+    p.set_defaults(func=cmd_activate)
 
     p = sub.add_parser("validate", help="validate the plan")
     p.set_defaults(func=cmd_validate)

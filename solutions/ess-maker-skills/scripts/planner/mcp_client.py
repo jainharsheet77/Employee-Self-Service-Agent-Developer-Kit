@@ -25,9 +25,12 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from typing import Any
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 DEFAULT_MCP_CONFIG = os.path.join(".vscode", "mcp.json")
 DEFAULT_SERVER_NAME = "weve-plan"
@@ -80,6 +83,10 @@ class McpClient:
         self._session_id: str | None = None
         self._next_id = 0
         self._initialized = False
+        self._tools_by_name: dict[str, dict[str, Any]] | None = None
+        self._lifecycle_rules: dict[str, Any] | None = None
+        self.server_instructions = ""
+        self.server_version = ""
 
     # -- transport ------------------------------------------------------- #
 
@@ -127,12 +134,60 @@ class McpClient:
         )
         self._post({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self._initialized = True
-        return result or {}
+        result = result or {}
+        self.server_instructions = result.get("instructions", "")
+        self.server_version = (result.get("serverInfo") or {}).get("version", "")
+        return result
 
     def list_tools(self) -> list[dict[str, Any]]:
         if not self._initialized:
             self.initialize()
-        return (self._rpc("tools/list") or {}).get("tools", [])
+        tools = (self._rpc("tools/list") or {}).get("tools", [])
+        self._tools_by_name = {
+            tool["name"]: tool
+            for tool in tools
+            if isinstance(tool, dict) and isinstance(tool.get("name"), str)
+        }
+        return tools
+
+    def lifecycle_rules(self) -> dict[str, Any]:
+        """Return the live WeveNova lifecycle/concurrency contract once per client."""
+        if self._lifecycle_rules is None:
+            payload = self.call_tool("get_wevenova_lifecycle_rules", {})
+            if not isinstance(payload, dict):
+                raise McpError(
+                    "get_wevenova_lifecycle_rules returned an unexpected payload"
+                )
+            self._lifecycle_rules = payload
+        return self._lifecycle_rules
+
+    def _tool(self, name: str) -> dict[str, Any]:
+        if self._tools_by_name is None:
+            self.list_tools()
+        tool = (self._tools_by_name or {}).get(name)
+        if tool is None:
+            raise McpError(
+                f"MCP tool {name!r} is not present in the live catalog; reconnect "
+                "or refresh the configured weve-plan server."
+            )
+        return tool
+
+    @staticmethod
+    def _validate_arguments(name: str, schema: dict[str, Any], arguments: dict[str, Any]) -> None:
+        properties = schema.get("properties") or {}
+        required = schema.get("required") or []
+        missing = [key for key in required if key not in arguments]
+        if missing:
+            raise McpError(
+                f"tool {name} missing required argument(s): {', '.join(missing)}"
+            )
+        if schema.get("additionalProperties") is False:
+            unexpected = [key for key in arguments if key not in properties]
+            if unexpected:
+                raise McpError(
+                    f"tool {name} does not accept argument(s): {', '.join(unexpected)}. "
+                    "The live tool catalog may have changed."
+                )
 
     def call_tool(self, name: str, arguments: dict[str, Any] | None = None) -> Any:
         """Call a tool and return its parsed payload.
@@ -144,19 +199,36 @@ class McpClient:
         """
         if not self._initialized:
             self.initialize()
+        tool = self._tool(name)
+        schema = tool.get("inputSchema") or {}
+        properties = schema.get("properties") or {}
         tool_arguments = dict(arguments or {})
-        if self.user_name and "userName" not in tool_arguments:
+        if self.user_name and "userName" in properties and "userName" not in tool_arguments:
             tool_arguments["userName"] = self.user_name
-        if self.aad_id and "aadId" not in tool_arguments:
+        if self.aad_id and "aadId" in properties and "aadId" not in tool_arguments:
             tool_arguments["aadId"] = self.aad_id
+        if self.user_name and "userName" not in properties:
+            raise McpError(
+                f"tool {name} does not expose userName in the live schema; refusing "
+                "to call it with the wrong token profile."
+            )
+        if self.aad_id and "aadId" not in properties:
+            raise McpError(
+                f"tool {name} does not expose aadId in the live schema; refusing "
+                "to call it with the wrong identity."
+            )
+        self._validate_arguments(name, schema, tool_arguments)
         result = self._rpc("tools/call", {"name": name, "arguments": tool_arguments}) or {}
         blocks = [c.get("text", "") for c in result.get("content", []) if c.get("type") == "text"]
         text = "\n".join(blocks).strip()
         if result.get("isError"):
-            raise McpError(f"tool {name} failed: {text[:300]}")
+            raise McpError(f"tool {name} failed: {text[:4000]}")
         # The proxy surfaces upstream failures as a plain "Upstream ... returned NNN ..." string.
         if text.startswith("Upstream ") and "returned" in text[:120]:
-            raise McpError(f"tool {name}: {text[:300]}")
+            raise McpError(f"tool {name}: {text[:4000]}")
+        structured = result.get("structuredContent")
+        if structured is not None:
+            return structured
         try:
             return json.loads(text)
         except json.JSONDecodeError:
@@ -275,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(_ping_project_plan(client))
             except Exception as exc:  # McpError, or a PlanStoreError from binding
                 print(f"get_project_plan unavailable: {exc}")
+                return 1
         return 0
     except McpError as exc:
         print(f"MCP error: {exc}")

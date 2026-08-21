@@ -48,6 +48,7 @@ class FakeAttestClient:
                 "Provider": arguments["provider"],
                 "PlanId": arguments["planId"],
                 "Status": "Active",
+                "ETag": f'W/"{self._next}"',
             }
             self.assignments[aid] = rec
             return rec
@@ -121,8 +122,9 @@ def test_validate_attestation_rejects_wrong_provider():
 def test_attest_shapes_args_and_derives_provider():
     c = _client()
     rec = c.attest(SUBJECT, "Workday Administrator", idempotency_key="k1")
-    name, args = c.client.calls[-1]
-    assert name == "attest_plan_role"
+    attest_calls = [(n, a) for (n, a) in c.client.calls if n == "attest_plan_role"]
+    assert len(attest_calls) == 1                       # one POST, plus a verify readback
+    _, args = attest_calls[0]
     assert args == {
         "tenantId": TENANT, "planId": PLAN, "subjectId": SUBJECT,
         "role": "WorkdayAdmin", "provider": "External", "idempotencyKey": "k1",

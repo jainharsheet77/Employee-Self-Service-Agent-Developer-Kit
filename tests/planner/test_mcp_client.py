@@ -116,6 +116,13 @@ class _RpcRecorder(mcp_client.McpClient):
         super().__init__("http://example", **kwargs)
         self._initialized = True
         self.sent: dict | None = None
+        # Seed a live tool catalog so call_tool's schema lookup + identity
+        # injection have a shape to validate against (no tools/list round-trip).
+        self._tools_by_name = {
+            name: {"name": name, "inputSchema": {
+                "properties": {"callerId": {}, "userName": {}, "aadId": {}}}}
+            for name in ("t", "list_project_plan_tasks_for_caller")
+        }
 
     def _rpc(self, method, params=None):
         self.sent = {"method": method, "params": params}

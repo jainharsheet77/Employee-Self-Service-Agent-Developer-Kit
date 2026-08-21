@@ -102,6 +102,12 @@ class McpPlanStore:
         self.tenant_id = tenant_id
         self.cache_path = cache_path
         self.warnings: list[str] = []
+        try:
+            self.lifecycle_rules = client.lifecycle_rules()
+        except McpError as exc:
+            raise PlanStoreError(
+                f"cannot load the live WeveNova lifecycle rules: {exc}"
+            ) from exc
 
     @property
     def summary_path(self) -> str:
@@ -179,6 +185,28 @@ class McpPlanStore:
                     out[tid] = t
         return out
 
+    def _get_plan_raw(self) -> dict[str, Any]:
+        try:
+            raw = self.client.call_tool("get_project_plan", self._ids())
+        except McpError as exc:
+            raise PlanStoreError(f"cannot read the current WeveNova plan: {exc}") from exc
+        if not isinstance(raw, dict):
+            raise PlanStoreError(f"unexpected project-plan payload: {raw!r:.120}")
+        return raw
+
+    def _get_task_raw(self, tid: str) -> dict[str, Any]:
+        try:
+            raw = self.client.call_tool(
+                "get_project_plan_task", {**self._ids(), "taskId": tid}
+            )
+        except McpError as exc:
+            raise PlanStoreError(
+                f"cannot read current task {tid} before mutation: {exc}"
+            ) from exc
+        if not isinstance(raw, dict):
+            raise PlanStoreError(f"unexpected task payload for {tid}: {raw!r:.120}")
+        return raw
+
     @staticmethod
     def _etag(raw: dict[str, Any] | None) -> str | None:
         """The current entity ETag the mutating tools require as If-Match."""
@@ -186,16 +214,88 @@ class McpPlanStore:
             return None
         return raw.get("ETag") or raw.get("etag") or raw.get("@odata.etag")
 
-    def _current_etag(self, tid: str) -> str | None:
-        """Re-read a task's fresh ETag (used between two mutations of the same
-        task so the second call does not send a stale If-Match)."""
-        try:
-            got = self.client.call_tool(
-                "get_project_plan_task", {**self._ids(), "taskId": tid}
+    @classmethod
+    def _required_etag(cls, raw: dict[str, Any], entity: str) -> str:
+        etag = cls._etag(raw)
+        if not etag:
+            raise PlanStoreError(
+                f"the direct WeveNova read for {entity} returned no ETag; refusing "
+                "an unsafe mutation."
             )
-        except McpError:
-            return None
-        return self._etag(got)
+        return etag
+
+    @staticmethod
+    def _is_etag_conflict(exc: McpError) -> bool:
+        text = str(exc).casefold()
+        return (
+            "preconditionfailed" in text
+            or "precondition failed" in text
+            or ("etag" in text and ("conflict" in text or "if-match" in text))
+        )
+
+    def _mutate_task(
+        self, tool: str, tid: str, arguments: dict[str, Any]
+    ) -> Any:
+        """Mutate a task with its direct-read ETag; retry once only for ETag conflict."""
+        for attempt in range(2):
+            current = self._get_task_raw(tid)
+            etag = self._required_etag(current, f"task {tid}")
+            try:
+                return self.client.call_tool(
+                    tool, {**self._ids(), "taskId": tid, **arguments, "etag": etag}
+                )
+            except McpError as exc:
+                if attempt == 0 and self._is_etag_conflict(exc):
+                    continue
+                raise
+        raise AssertionError("unreachable")
+
+    def _mutate_plan(self, patch: dict[str, Any]) -> Any:
+        """Patch the plan with a direct-read ETag; retry once only for ETag conflict."""
+        for attempt in range(2):
+            current = self._get_plan_raw()
+            etag = self._required_etag(current, f"plan {self.plan_id}")
+            try:
+                return self.client.call_tool(
+                    "update_project_plan",
+                    {**self._ids(), "patch": patch, "etag": etag},
+                )
+            except McpError as exc:
+                if attempt == 0 and self._is_etag_conflict(exc):
+                    continue
+                raise
+        raise AssertionError("unreachable")
+
+    def _require_active_plan(self) -> None:
+        plan = self._get_plan_raw()
+        status = plan.get("Status") or plan.get("status")
+        if status != "Active":
+            owner = plan.get("OwnedById") or plan.get("ownedById") or "the plan owner"
+            rule = self.lifecycle_rules.get("planActivationRule", "")
+            suffix = f" {rule}" if rule else ""
+            raise PlanStoreError(
+                f"cannot change task state while plan {self.plan_id} is {status!r}. "
+                f"It must be activated by {owner} before task execution.{suffix}"
+            )
+
+    def activate(self) -> dict[str, Any]:
+        """Activate this plan as its resource owner and return the verified plan."""
+        current = self._get_plan_raw()
+        status = current.get("Status") or current.get("status")
+        if status == "Active":
+            return current
+        try:
+            self._mutate_plan({"Status": "Active"})
+        except McpError as exc:
+            raise PlanStoreError(f"cannot activate the WeveNova plan: {exc}") from exc
+        verified = self._get_plan_raw()
+        verified_status = verified.get("Status") or verified.get("status")
+        if verified_status != "Active":
+            raise PlanStoreError(
+                f"activation returned without error, but plan status is "
+                f"{verified_status!r}; do not start tasks."
+            )
+        return verified
 
     def _create_task(self, body: dict[str, Any]) -> None:
         """Create a task on the plan. A **pooled role** task (``AssignedToType ==
@@ -219,36 +319,43 @@ class McpPlanStore:
             self.client.call_tool("create_project_plan_task", {**self._ids(), "task": body})
 
     def _update_task(
-        self, tid: str, body: dict[str, Any], current: dict[str, Any], etag: str | None
+        self, tid: str, body: dict[str, Any], current: dict[str, Any]
     ) -> None:
         """Reconcile a changed task. The mutating tools require the current ETag
         as If-Match, so a single task is mutated **at most once per call where
         possible**: a pure lifecycle change goes through
         ``set_project_plan_task_state``; any content change is a single
         ``update_project_plan_task`` PATCH. When *both* a content field and the
-        state changed we PATCH first, then re-read the fresh ETag before the state
-        call — otherwise the second call would send a stale If-Match and fail."""
+        state changed we PATCH first, then the state helper directly re-reads the
+        task before the second mutation. Every mutation uses a direct entity GET;
+        list-response ETags are used only for change detection, never If-Match."""
         state_changed = body.get("State") != current.get("State")
         non_state = {k: v for k, v in body.items() if k != "State"}
         cur_non_state = {k: v for k, v in current.items() if k != "State"}
         fields_changed = non_state != cur_non_state
 
-        if fields_changed:
-            self.client.call_tool(
-                "update_project_plan_task",
-                {**self._ids(), "taskId": tid, "patch": non_state, "etag": etag},
-            )
-            if state_changed:  # PATCH bumped the ETag — read the fresh one
-                etag = self._current_etag(tid) or etag
+        desired_state = body.get("State", "NotStarted")
         if state_changed:
-            self.client.call_tool(
+            if desired_state not in {"NotStarted", "InProgress", "Completed", "Cancelled"}:
+                raise PlanStoreError(
+                    f"WeveNova does not support task state {desired_state!r}; use "
+                    "NotStarted, InProgress, Completed, or Cancelled."
+                )
+            # Check before any content PATCH so a Draft plan cannot leave a
+            # half-applied content+state update.
+            self._require_active_plan()
+
+        if fields_changed:
+            self._mutate_task(
+                "update_project_plan_task",
+                tid,
+                {"patch": non_state},
+            )
+        if state_changed:
+            self._mutate_task(
                 "set_project_plan_task_state",
-                {
-                    **self._ids(),
-                    "taskId": tid,
-                    "state": body.get("State", "NotStarted"),
-                    "etag": etag,
-                },
+                tid,
+                {"state": desired_state},
             )
 
     def _reconcile_plan_fields(self, plan: Plan) -> list[str]:
@@ -269,12 +376,8 @@ class McpPlanStore:
         current = wm.plan_fields_to_weve(wm.plan_from_weve(server_doc))
         if desired == current:
             return []
-        etag = self._etag(server_doc) or plan.data.get("etag") or ""
         try:
-            self.client.call_tool(
-                "update_project_plan",
-                {**self._ids(), "patch": desired, "etag": etag},
-            )
+            self._mutate_plan(desired)
         except McpError as exc:
             raise PlanStoreError(f"cannot persist plan context to WeveNova: {exc}") from exc
         return []
@@ -288,7 +391,9 @@ class McpPlanStore:
         **patched** (a pure state change via the dedicated state tool); unchanged
         tasks are left alone (no no-op writes); a server task no longer in the plan
         is **deleted**. The mutating tools require the current entity ETag as
-        If-Match, which is read from the freshly-listed server task. Plan-level
+        If-Match, which is read from the task's direct GET immediately before each
+        mutation. A genuine ETag conflict is re-read and retried once; lifecycle
+        conflicts are never retried. Plan-level
         **context + acceptance criteria are also reconciled** to WeveNova (via
         :meth:`_reconcile_plan_fields`); only Outputs remain upstream-owned (pinned
         on task completion) — a notice is returned when the local plan holds them.
@@ -309,15 +414,17 @@ class McpPlanStore:
                     # Only patch when the writable projection actually changed.
                     current = wm.task_to_weve(wm.task_from_weve(server[tid]), include_id=False)
                     if body != current:
-                        self._update_task(tid, body, current, self._etag(server[tid]))
+                        direct = self._get_task_raw(tid)
+                        current = wm.task_to_weve(
+                            wm.task_from_weve(direct), include_id=False
+                        )
+                        if body != current:
+                            self._update_task(tid, body, current)
                 else:
                     self._create_task(body)
             for stale in set(server) - local_ids:
-                self.client.call_tool(
-                    "delete_project_plan_task",
-                    {**self._ids(), "taskId": stale, "etag": self._etag(server[stale])},
-                )
-        except McpError as exc:
+                self._mutate_task("delete_project_plan_task", stale, {})
+        except (McpError, PlanStoreError) as exc:
             raise PlanStoreError(f"cannot persist tasks to WeveNova: {exc}") from exc
 
         # Plan-level context + acceptance criteria are read-write over MCP too:

@@ -36,6 +36,14 @@ class _FakeToolClient:
                 "SubjectId": (arguments or {})["subjectId"],
                 "Status": "Active",
             }
+        if name == "list_plan_role_assignments":
+            # the post-attest verification readback — surface the Active grant
+            return {"value": [{
+                "AssignmentId": "assign-1",
+                "Role": (arguments or {}).get("role", "WorkdayAdmin"),
+                "SubjectId": (arguments or {}).get("subjectId", SUBJECT),
+                "Status": "Active",
+            }]}
         raise McpError(f"unexpected tool {name}")
 
 
@@ -78,8 +86,9 @@ def test_attest_threads_person_and_role(monkeypatch, capsys):
     rc = roles_cli.main(["attest", "--person", SUBJECT, "--role", "Workday Administrator"])
     out = capsys.readouterr().out
     assert rc == 0
-    name, args = fake.calls[-1]
-    assert name == "attest_plan_role"
+    attest_calls = [(n, a) for (n, a) in fake.calls if n == "attest_plan_role"]
+    assert len(attest_calls) == 1                      # a single POST, plus a readback
+    _, args = attest_calls[0]
     # display name resolved to the compact wire id; provider derived
     assert args["role"] == "WorkdayAdmin"
     assert args["provider"] == "External"
@@ -142,20 +151,6 @@ def test_find_users_resolves_aad_id(monkeypatch, capsys):
     # the resolved aadId (== Entra object id for attest --person) is surfaced
     assert "8fde91b6-45cd-4dbf-9908-439cfdd0311e" in out
     assert "primary" in out
-
-
-def test_find_users_surfaces_demo_cache_warning(monkeypatch, capsys):
-    payload = {
-        "users": [{"aadId": "00000000-0000-0000-0000-000000000001", "displayName": "primary"}],
-        "warning": "WeveNova SearchPeople was unavailable; returned cache results only.",
-    }
-    monkeypatch.setattr(roles_cli, "_weve_client", lambda args: _FakePeopleClient(payload))
-
-    rc = roles_cli.main(["find-users", "--name", "primary"])
-    captured = capsys.readouterr()
-    assert rc == 0                                   # a cache hit is still a hit
-    assert "warning:" in captured.err               # but the caveat is surfaced
-    assert "unavailable" in captured.err
 
 
 def test_find_users_reports_no_match(monkeypatch, capsys):

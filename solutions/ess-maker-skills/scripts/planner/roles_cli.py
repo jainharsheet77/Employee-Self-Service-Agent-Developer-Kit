@@ -128,11 +128,7 @@ def cmd_find_users(args: argparse.Namespace) -> int:
     ``weve-plan`` MCP the plan lives on), needing no separate sign-in. Turns
     "assign <role> to <name>" into the ``aadId`` that ``attest --person`` wants.
     Read-only. A **temporary stand-in for Work IQ** people search — same seam, same
-    ``aadId`` result once Work IQ replaces it.
-
-    A ``warning`` in the payload means the live directory was unavailable and the
-    result came from the demo cache — surfaced on stderr so the skill can caveat
-    the match instead of trusting it blindly."""
+    ``aadId`` result once Work IQ replaces it."""
     from planner.mcp_client import McpError
 
     client = _weve_client(args)
@@ -143,13 +139,9 @@ def cmd_find_users(args: argparse.Namespace) -> int:
         return 1
 
     users = _users_from_payload(payload)
-    warning = payload.get("warning") if isinstance(payload, dict) else None
-
     if args.json:
         print(json.dumps(payload, indent=2, default=str))
         return 0
-    if warning:
-        print(f"warning: {warning}", file=sys.stderr)
     if not users:
         print(f"No one in the WeveNova directory matched {args.name!r}.")
         return 0
@@ -303,6 +295,11 @@ def cmd_caller_tasks(args: argparse.Namespace) -> int:
     except AttestationError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+    # Surface producers before the tasks that consume what they produce, so the
+    # list reads in the order the work can be done (Learn order breaks ties).
+    from planner.plan_model import order_tasks_by_dependency
+
+    tasks = order_tasks_by_dependency(tasks)
     if args.json:
         print(json.dumps(tasks, indent=2))
         return 0
@@ -342,20 +339,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--role", required=True, help="an attestable role (id or display name; see `roles`)")
     p.add_argument("--provider", help="the role's owner (External/Entra/PowerPlatform); derived when omitted")
     p.add_argument("--idempotency-key", dest="idempotency_key", help="optional idempotency key for replay-safe attest")
-    p.add_argument("--etag", help="optional If-Match etag for convergence")
+    p.add_argument(
+        "--etag",
+        help="existing role assignment's strong ETag only; omit for first attestation",
+    )
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_attest)
 
     p = sub.add_parser("assignments", help="list the plan's role assignments")
     p.add_argument("--person", help="filter by subject (person) oid")
     p.add_argument("--role", help="filter by role (id or display name)")
-    p.add_argument("--status", help="filter by status, e.g. Active/Revoked")
+    p.add_argument("--status", choices=["Active", "Revoked"], help="filter by status")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_assignments)
 
     p = sub.add_parser("revoke", help="revoke a role assignment on the plan")
     p.add_argument("--assignment", required=True, help="the assignment id to revoke")
-    p.add_argument("--etag", help="optional If-Match etag")
+    p.add_argument(
+        "--etag",
+        help="current assignment ETag; when omitted the assignment is read first",
+    )
     p.set_defaults(func=cmd_revoke)
 
     p = sub.add_parser("caller-tasks", help="show YOUR tasks: direct + pooled-for-your-roles (Flow 2, self-only)")

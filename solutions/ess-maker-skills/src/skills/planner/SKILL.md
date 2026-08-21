@@ -213,3 +213,23 @@ save per interview step). **`--force`** is required when the plan already exists
 upstream: `push` makes WeveNova **match local**, so it deletes upstream tasks
 absent from your local plan — always `pull` first (as shown) so a co-editor's
 tasks aren't dropped.
+
+## Live WeveNova lifecycle rules
+
+For `--store mcp`, the CLI loads `get_wevenova_lifecycle_rules` from the live
+server and validates every call against the current `tools/list` schema. Do not
+invent bound actions or reuse cached tool shapes.
+
+- Task execution (`InProgress`, `Completed`, or `Cancelled`) requires the parent
+  plan to be **Active**. A `PlanNotActive` 409 is not an ETag conflict and must
+  not be retried.
+- Only the plan's **resource owner** may activate it. The owner reads the plan,
+  then calls `update_project_plan` with `{"Status":"Active"}` and that direct
+  read's ETag. Use:
+  `python scripts/planner/cli.py --store mcp activate`.
+  A role attestation does not grant plan-lifecycle ownership.
+- Every PATCH/DELETE uses the exact target entity's ETag from its direct
+  `get_*` tool immediately before mutation. Never use a parent or list-response
+  ETag. Re-read and retry at most once only for an explicit ETag mismatch.
+- The supported task states are `NotStarted`, `InProgress`, `Completed`, and
+  `Cancelled`.
