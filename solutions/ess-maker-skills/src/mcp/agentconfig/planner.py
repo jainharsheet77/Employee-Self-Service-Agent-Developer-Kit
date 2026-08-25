@@ -1,0 +1,416 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""WeveNova project / plan / task endpoints (AgentConfiguration beta).
+
+``PlannerMixin`` is composed onto the base ``AgentConfigClient`` (see
+``planner_client.py``) and reuses its bearer auth, tenant decode, httpx
+session, and retrying ``_request``. These routes live on the beta base
+(``.../api/beta/me/agentConfigurationProjects``) and are addressed with
+absolute URLs; httpx uses an absolute URL verbatim while still applying the
+shared bearer/Accept headers. Bodies are camelCase and responses are returned
+untransformed (``transform_payload=False``).
+"""
+
+from __future__ import annotations
+
+from typing import Any, Optional
+
+from client import AgentConfigApiError
+from roles import ATTESTABLE_ROLES
+from _odata import (
+    _build_query_params,
+    _escape_odata_literal,
+    _mutation_headers,
+    _require_odata_id,
+)
+
+_AGENT_PROJECTS_COLLECTION = "me/agentConfigurationProjects"
+_PLANS_RESOURCE = "agentPlans"
+_TASKS_RESOURCE = "agentPlanTasks"
+
+_PROJECT_ARCHIVE_STATE = "Archived"
+_PLAN_ARCHIVE_STATUS = "Archived"
+_TASK_STATES = ("NotStarted", "InProgress", "Completed", "Cancelled")
+# Scalar-group fields accepted by update_project_plan_task; lifecycle fields
+# (state, outputs) go through set_project_plan_task_state / complete.
+_TASK_UPDATE_FIELDS = ("title", "description", "assignedToId", "produces", "consumes")
+_OUTPUT_KINDS = ("Custom", "Environment", "Connection", "KnowledgeSource")
+
+
+def _normalize_completion_outputs(outputs: Any) -> list[dict[str, Any]]:
+    """Validate and normalize task-completion artifacts to the PlanArtifact shape."""
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError("outputs must contain at least one completion artifact")
+    seen: set[str] = set()
+    normalized: list[dict[str, Any]] = []
+    for index, output in enumerate(outputs):
+        if not isinstance(output, dict):
+            raise ValueError(f"outputs[{index}] must be an object")
+        key = str(output.get("key", "")).strip()
+        if not key:
+            raise ValueError(f"outputs[{index}].key is required")
+        if key in seen:
+            raise ValueError(f"outputs contains duplicate key {key}")
+        seen.add(key)
+        kind = str(output.get("kind", ""))
+        if kind not in _OUTPUT_KINDS:
+            raise ValueError(
+                f"outputs[{index}].kind must be one of {', '.join(_OUTPUT_KINDS)}"
+            )
+        raw_attributes = output.get("attributes")
+        if not isinstance(raw_attributes, list):
+            raise ValueError(f"outputs[{index}].attributes must be an array")
+        attributes: list[dict[str, Any]] = []
+        for attr_index, attribute in enumerate(raw_attributes):
+            if not isinstance(attribute, dict):
+                raise ValueError(
+                    f"outputs[{index}].attributes[{attr_index}] must be an object"
+                )
+            attribute_key = str(attribute.get("key", "")).strip()
+            if not attribute_key:
+                raise ValueError(
+                    f"outputs[{index}].attributes[{attr_index}].key is required"
+                )
+            entry: dict[str, Any] = {
+                "key": attribute_key,
+                "value": attribute.get("value"),
+            }
+            if attribute.get("description") is not None:
+                entry["description"] = attribute["description"]
+            attributes.append(entry)
+        if kind == "Environment" and not any(
+            attribute["key"] == "environmentId"
+            and str(attribute.get("value") or "").strip()
+            for attribute in attributes
+        ):
+            raise ValueError(
+                f"outputs[{index}] Environment requires a non-empty "
+                "environmentId attribute"
+            )
+        artifact: dict[str, Any] = {"key": key, "kind": kind, "attributes": attributes}
+        if output.get("inventoryRef"):
+            artifact["inventoryRef"] = output["inventoryRef"]
+        normalized.append(artifact)
+    return normalized
+
+
+class PlannerMixin:
+    """Project / plan / task methods for the AgentConfiguration beta surface."""
+
+    # Provided by the assembled client (PlannerClient).
+    projects_base_url: str
+    _caller_object_id: Optional[str]
+
+    # ------------------------------------------------------------------
+    # URL builders
+    # ------------------------------------------------------------------
+    def _projects_collection_url(self) -> str:
+        return f"{self.projects_base_url}/{_AGENT_PROJECTS_COLLECTION}"
+
+    def _project_url(self, project_id: str) -> str:
+        return (
+            f"{self._projects_collection_url()}"
+            f"('{_require_odata_id(project_id, 'projectId')}')"
+        )
+
+    def _plans_collection_url(self, project_id: str) -> str:
+        return f"{self._project_url(project_id)}/{_PLANS_RESOURCE}"
+
+    def _plan_url(self, project_id: str, plan_id: str) -> str:
+        return (
+            f"{self._plans_collection_url(project_id)}"
+            f"('{_require_odata_id(plan_id, 'planId')}')"
+        )
+
+    def _tasks_collection_url(self, project_id: str, plan_id: str) -> str:
+        return f"{self._plan_url(project_id, plan_id)}/{_TASKS_RESOURCE}"
+
+    def _task_url(self, project_id: str, plan_id: str, task_id: str) -> str:
+        return (
+            f"{self._tasks_collection_url(project_id, plan_id)}"
+            f"('{_require_odata_id(task_id, 'taskId')}')"
+        )
+
+    # ------------------------------------------------------------------
+    # Projects
+    # ------------------------------------------------------------------
+    async def list_agent_configuration_projects(
+        self, query: Optional[dict[str, Any]] = None
+    ) -> Any:
+        return await self._request(
+            "GET",
+            self._projects_collection_url(),
+            params=_build_query_params(query),
+            transform_payload=False,
+        )
+
+    async def get_agent_configuration_project(
+        self, project_id: str, query: Optional[dict[str, Any]] = None
+    ) -> Any:
+        return await self._request(
+            "GET",
+            self._project_url(project_id),
+            params=_build_query_params(query),
+            transform_payload=False,
+        )
+
+    async def create_agent_configuration_project(
+        self, project: dict[str, Any], idempotency_key: Optional[str] = None
+    ) -> Any:
+        if not isinstance(project, dict):
+            raise ValueError("project must be an object")
+        return await self._request(
+            "POST",
+            self._projects_collection_url(),
+            json=project,
+            headers=_mutation_headers(idempotency_key=idempotency_key),
+            transform_payload=False,
+        )
+
+    async def archive_agent_configuration_project(
+        self, project_id: str, etag: str
+    ) -> Any:
+        return await self._request(
+            "PATCH",
+            self._project_url(project_id),
+            json={"state": _PROJECT_ARCHIVE_STATE},
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )
+
+    # ------------------------------------------------------------------
+    # Plans
+    # ------------------------------------------------------------------
+    async def list_project_plans(
+        self, project_id: str, query: Optional[dict[str, Any]] = None
+    ) -> Any:
+        return await self._request(
+            "GET",
+            self._plans_collection_url(project_id),
+            params=_build_query_params(query),
+            transform_payload=False,
+        )
+
+    async def get_project_plan(
+        self, project_id: str, plan_id: str, query: Optional[dict[str, Any]] = None
+    ) -> Any:
+        return await self._request(
+            "GET",
+            self._plan_url(project_id, plan_id),
+            params=_build_query_params(query),
+            transform_payload=False,
+        )
+
+    async def create_project_plan(
+        self,
+        project_id: str,
+        plan: dict[str, Any],
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
+        if not isinstance(plan, dict):
+            raise ValueError("plan must be an object")
+        return await self._request(
+            "POST",
+            self._plans_collection_url(project_id),
+            json=plan,
+            headers=_mutation_headers(idempotency_key=idempotency_key),
+            transform_payload=False,
+        )
+
+    async def update_project_plan(
+        self, project_id: str, plan_id: str, patch: dict[str, Any], etag: str
+    ) -> Any:
+        if not isinstance(patch, dict) or not patch:
+            raise ValueError("patch must be a non-empty object")
+        return await self._request(
+            "PATCH",
+            self._plan_url(project_id, plan_id),
+            json=patch,
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )
+
+    async def archive_project_plan(
+        self, project_id: str, plan_id: str, etag: str
+    ) -> Any:
+        return await self._request(
+            "PATCH",
+            self._plan_url(project_id, plan_id),
+            json={"status": _PLAN_ARCHIVE_STATUS},
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )
+
+    # ------------------------------------------------------------------
+    # Tasks
+    # ------------------------------------------------------------------
+    async def list_project_plan_tasks(
+        self, project_id: str, plan_id: str, query: Optional[dict[str, Any]] = None
+    ) -> Any:
+        return await self._request(
+            "GET",
+            self._tasks_collection_url(project_id, plan_id),
+            params=_build_query_params(query),
+            transform_payload=False,
+        )
+
+    async def list_project_plan_tasks_for_caller(
+        self, project_id: str, plan_id: str, query: Optional[dict[str, Any]] = None
+    ) -> Any:
+        caller_id = self._caller_object_id
+        if not caller_id:
+            raise AgentConfigApiError(
+                "The access token has no 'oid' claim; cannot scope tasks to the caller."
+            )
+        caller_filter = (
+            f"assignedToId eq '{_escape_odata_literal(caller_id, 'callerId')}'"
+        )
+        merged = dict(query or {})
+        existing = merged.get("filter")
+        merged["filter"] = (
+            f"{caller_filter} and ({existing})" if existing else caller_filter
+        )
+        return await self._request(
+            "GET",
+            self._tasks_collection_url(project_id, plan_id),
+            params=_build_query_params(merged),
+            transform_payload=False,
+        )
+
+    async def get_project_plan_task(
+        self,
+        project_id: str,
+        plan_id: str,
+        task_id: str,
+        query: Optional[dict[str, Any]] = None,
+    ) -> Any:
+        return await self._request(
+            "GET",
+            self._task_url(project_id, plan_id, task_id),
+            params=_build_query_params(query),
+            transform_payload=False,
+        )
+
+    async def create_project_plan_task(
+        self,
+        project_id: str,
+        plan_id: str,
+        task: dict[str, Any],
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
+        if not isinstance(task, dict):
+            raise ValueError("task must be an object")
+        return await self._request(
+            "POST",
+            self._tasks_collection_url(project_id, plan_id),
+            json=task,
+            headers=_mutation_headers(idempotency_key=idempotency_key),
+            transform_payload=False,
+        )
+
+    async def create_role_assigned_project_plan_task(
+        self,
+        project_id: str,
+        plan_id: str,
+        role: str,
+        title: str,
+        description: Optional[str] = None,
+        produces: Optional[list[str]] = None,
+        consumes: Optional[list[str]] = None,
+        idempotency_key: Optional[str] = None,
+    ) -> Any:
+        if role not in ATTESTABLE_ROLES:
+            raise ValueError("role must be one of " + ", ".join(ATTESTABLE_ROLES))
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError("title must be a non-empty string")
+        body: dict[str, Any] = {
+            "title": title,
+            "assignedToId": role,
+            "assignedToType": "Role",
+            "assignedToRoleId": role,
+        }
+        if description is not None:
+            body["description"] = description
+        if produces is not None:
+            body["produces"] = produces
+        if consumes is not None:
+            body["consumes"] = consumes
+        return await self._request(
+            "POST",
+            self._tasks_collection_url(project_id, plan_id),
+            json=body,
+            headers=_mutation_headers(idempotency_key=idempotency_key),
+            transform_payload=False,
+        )
+
+    async def update_project_plan_task(
+        self,
+        project_id: str,
+        plan_id: str,
+        task_id: str,
+        patch: dict[str, Any],
+        etag: str,
+    ) -> Any:
+        if not isinstance(patch, dict) or not patch:
+            raise ValueError("patch must be a non-empty object")
+        allowed = {field.lower() for field in _TASK_UPDATE_FIELDS}
+        for key in patch:
+            if key.lower() not in allowed:
+                raise ValueError(
+                    f"patch.{key} is not accepted here; use "
+                    "set_project_plan_task_state or complete_project_plan_task "
+                    "for lifecycle changes"
+                )
+        return await self._request(
+            "PATCH",
+            self._task_url(project_id, plan_id, task_id),
+            json=patch,
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )
+
+    async def set_project_plan_task_state(
+        self,
+        project_id: str,
+        plan_id: str,
+        task_id: str,
+        state: str,
+        etag: str,
+    ) -> Any:
+        if state not in _TASK_STATES:
+            raise ValueError(f"state must be one of {', '.join(_TASK_STATES)}")
+        return await self._request(
+            "PATCH",
+            self._task_url(project_id, plan_id, task_id),
+            json={"state": state},
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )
+
+    async def complete_project_plan_task(
+        self,
+        project_id: str,
+        plan_id: str,
+        task_id: str,
+        outputs: list[dict[str, Any]],
+        etag: str,
+    ) -> Any:
+        normalized = _normalize_completion_outputs(outputs)
+        return await self._request(
+            "PATCH",
+            self._task_url(project_id, plan_id, task_id),
+            json={"state": "Completed", "outputs": normalized},
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )
+
+    async def delete_project_plan_task(
+        self, project_id: str, plan_id: str, task_id: str, etag: str
+    ) -> Any:
+        return await self._request(
+            "DELETE",
+            self._task_url(project_id, plan_id, task_id),
+            headers=_mutation_headers(etag=etag),
+            transform_payload=False,
+        )

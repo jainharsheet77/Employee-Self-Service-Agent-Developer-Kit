@@ -336,8 +336,22 @@ class AgentConfigClient:
         encoded = _encode_odata_key(_validate_title_id(title_id))
         return f"{self._collection_path()}('{encoded}')"
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
-        """Execute a request with bounded retry for transient responses."""
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        transform_payload: bool = True,
+        **kwargs: Any,
+    ) -> Any:
+        """Execute a request with bounded retry for transient responses.
+
+        ``transform_payload`` controls the landing-page camelCase/PascalCase key
+        conversion applied to the response body. It defaults to ``True`` so the
+        EmployeeAgents surface is unchanged; the planner and role surfaces pass
+        ``False`` because their responses carry user keys that must not be
+        rewritten.
+        """
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries):
             client = await self._ensure_client()
@@ -365,7 +379,8 @@ class AgentConfigClient:
                 response.raise_for_status()
                 if response.status_code == 204:
                     return {"success": True}
-                return _to_tool_payload(response.json())
+                payload = response.json()
+                return _to_tool_payload(payload) if transform_payload else payload
 
             except httpx.HTTPStatusError as error:
                 code = ""
