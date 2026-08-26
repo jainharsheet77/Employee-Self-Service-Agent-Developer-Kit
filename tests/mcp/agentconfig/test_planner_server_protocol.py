@@ -243,6 +243,10 @@ def test_key_tool_descriptions_explain_how_to_invoke() -> None:
     attest = tools["attest_plan_role"].description
     assert "External" in attest
     assert "WorkdayAdmin" in attest
+    # Plan creation documents the required configuringAgentName enum.
+    create_plan = tools["create_project_plan"].description
+    assert "configuringAgentName" in create_plan
+    assert "EmployeeSelfServiceHRCEA" in create_plan
     # The caller-scoped listing documents that identity comes from the token.
     caller = tools["list_project_plan_tasks_for_caller"].description
     assert "access token" in caller

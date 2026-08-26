@@ -112,7 +112,9 @@ async def create_agent_configuration_project(
     project: dict[str, Any],
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Get-or-create a project by name, e.g. {"name": "Employee Self Serve"}."""
+    """Get-or-create a project by name (case/whitespace-insensitive). Supported
+    names: {"name": "Employee Self Serve"} or {"name": "Workforce Insights"};
+    optional ownedById? and metadata?. An unsupported name is rejected (400)."""
     return _format(
         await get_client().create_agent_configuration_project(project, idempotencyKey)
     )
@@ -152,8 +154,12 @@ async def create_project_plan(
     plan: dict[str, Any],
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Create a plan in a project (body: ownedById?, acceptanceCriteria?,
-    context?, tasks?). New plans start in Draft."""
+    """Create a plan in a project. Body: configuringAgentName is REQUIRED — the
+    ESS agent this plan configures, one of EmployeeSelfServiceHRCEA,
+    EmployeeSelfServiceHRDA, EmployeeSelfServiceITCEA, EmployeeSelfServiceITDA;
+    then optional ownedById?, acceptanceCriteria?, context?, and tasks? (inline
+    tasks are created atomically with the plan, max 50). Unknown fields are
+    rejected (400). New plans start in Draft."""
     return _format(
         await get_client().create_project_plan(projectId, plan, idempotencyKey)
     )
@@ -167,8 +173,11 @@ async def update_project_plan(
     etag: str,
 ) -> str:
     """Patch plan fields or dispatch a lifecycle change. Activate a Draft plan
-    with patch {"status": "Active"}; also supports {"status": "Completed"},
-    {"ownedById": ...}, {"acceptanceCriteria": [...]}, or {"context": [...]}.
+    with patch {"status": "Active"}; also supports {"status": "Completed"} (use
+    archive_project_plan for Archived), {"ownedById": ...},
+    {"acceptanceCriteria": [...]}, or {"context": [...]}. Send a lifecycle field
+    (status or ownedById) on its own — it cannot be combined with the other
+    lifecycle field or with an acceptanceCriteria/context edit in one PATCH.
     Only the plan owner may change status. Requires the plan's current ETag; a
     stale ETag is re-read and retried once automatically."""
     return _format(
@@ -201,8 +210,11 @@ async def list_project_plan_tasks_for_caller(
     planId: str,
     query: Optional[dict[str, Any]] = None,
 ) -> str:
-    """List the plan's tasks assigned to the authenticated caller. The caller
-    Entra id is taken from the access token, not an argument."""
+    """List the plan's tasks for the authenticated caller — both tasks assigned
+    directly to them AND tasks pooled to any attestable role the caller holds an
+    active role assignment for (role-expanded). Attesting a caller into a role
+    (attest_plan_role) is what makes that role's pooled tasks appear here. The
+    caller Entra id is taken from the access token, not an argument."""
     return _format(
         await get_client().list_project_plan_tasks_for_caller(
             projectId, planId, query
@@ -275,12 +287,14 @@ async def update_project_plan_task(
     patch: dict[str, Any],
     etag: str,
 ) -> str:
-    """Patch task content or claim a pooled task. Accepts only title,
-    description, assignedToId, produces, consumes. To claim a role-pooled task,
-    send patch {"assignedToId": "<user-aad-id>"}. Use set_project_plan_task_state
-    or complete_project_plan_task for lifecycle changes. Requires the task's
-    current ETag; a stale ETag is re-read and retried once, and a non-Active
-    parent plan yields an actionable "activate the plan first" message."""
+    """Patch task content or claim/reassign a pooled task. Accepts only title,
+    description, assignedToId, produces, consumes. Reassignment is a lifecycle
+    edit: send assignedToId on its own (a non-empty AAD id claims/reassigns, ""
+    unassigns) — it cannot be combined with a title/description/produces/consumes
+    edit in one PATCH. Use set_project_plan_task_state or
+    complete_project_plan_task for state and outputs. Requires the task's current
+    ETag; a stale ETag is re-read and retried once, and a non-Active parent plan
+    yields an actionable "activate the plan first" message."""
     return _format(
         await get_client().update_project_plan_task(
             projectId, planId, taskId, patch, etag
