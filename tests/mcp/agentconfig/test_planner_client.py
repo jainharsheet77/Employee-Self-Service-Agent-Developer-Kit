@@ -75,6 +75,11 @@ def _run(client, coro_factory):
     return asyncio.run(run())
 
 
+async def _no_sleep(*_args, **_kwargs):
+    """Drop-in for asyncio.sleep so retry backoff is instant under test."""
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Identity / base URL wiring
 # ---------------------------------------------------------------------------
@@ -481,9 +486,11 @@ def test_attestable_roles_constant_is_the_provider_owned_set() -> None:
 # ETag / plan-state conflict recovery
 #
 # WeveNova returns 412 PreconditionFailed for a stale/mismatched If-Match and
-# 409 Conflict when a task mutation targets a non-Active plan. The client
-# re-reads and retries once on the former and turns the latter into an
-# actionable message; these tests pin both paths through MockTransport.
+# 409 Conflict when a task mutation targets a non-Active plan. On the former the
+# client re-reads only to raise an actionable "the ETag advanced, re-read and
+# reapply" error -- it never replays the mutation, since replaying would defeat
+# the If-Match lost-update guard. On the latter it turns the generic conflict
+# into an actionable message. These tests pin both paths through MockTransport.
 # ---------------------------------------------------------------------------
 def _stale_then_ok_handler(requests, mutate_method, retry_response, refetch_json):
     """Handler: first mutation -> 412, re-GET -> refetch_json, retry -> ok."""
@@ -504,7 +511,10 @@ def _stale_then_ok_handler(requests, mutate_method, retry_response, refetch_json
     return handler
 
 
-def test_task_update_recovers_from_stale_etag_412(monkeypatch) -> None:
+def test_task_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> None:
+    # A moved ETag is indistinguishable from a concurrent edit to the same
+    # fields, so the client must NOT auto-replay the PATCH; it re-reads only to
+    # raise an actionable 412 telling the caller to re-read and reapply.
     requests: list[httpx.Request] = []
     client = _make_client(
         monkeypatch,
@@ -513,26 +523,30 @@ def test_task_update_recovers_from_stale_etag_412(monkeypatch) -> None:
         ),
     )
 
-    result = _run(
-        client,
-        lambda: client.update_project_plan_task(
-            "proj1", "plan1", "task1", {"title": "New"}, 'W/"1"'
-        ),
-    )
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.update_project_plan_task(
+                "proj1", "plan1", "task1", {"title": "New"}, 'W/"1"'
+            ),
+        )
 
-    assert result == {"ok": True}
+    assert excinfo.value.http_status == 412
+    message = str(excinfo.value)
+    assert "re-read" in message.lower()
+    assert 'W/"2"' in message  # surfaces the advanced ETag so the caller can act
+    # Exactly one PATCH (no blind replay) and a single re-read GET.
     patches = [r for r in requests if r.method == "PATCH"]
-    assert [p.headers["If-Match"] for p in patches] == ['W/"1"', 'W/"2"']
-    # The retry replays the exact same body, only the ETag advances.
-    assert json.loads(patches[1].content) == {"title": "New"}
+    assert [p.headers["If-Match"] for p in patches] == ['W/"1"']
     gets = [r for r in requests if r.method == "GET"]
     assert len(gets) == 1
     assert str(gets[0].url).endswith("agentPlanTasks('task1')")
 
 
-def test_task_delete_recovers_from_stale_etag_412(monkeypatch) -> None:
-    # Mirrors the live smoke case: completing a producer task bumps a consumer
-    # task's version, so its create-time ETag is stale by delete time.
+def test_task_delete_preserves_stale_etag_412_without_replaying(monkeypatch) -> None:
+    # A moved ETag on DELETE is just as ambiguous as on PATCH: the entity may
+    # have been edited after the caller read it, so replaying the DELETE could
+    # destroy work done in between. The client re-reads only to raise.
     requests: list[httpx.Request] = []
     client = _make_client(
         monkeypatch,
@@ -541,17 +555,21 @@ def test_task_delete_recovers_from_stale_etag_412(monkeypatch) -> None:
         ),
     )
 
-    result = _run(
-        client,
-        lambda: client.delete_project_plan_task("proj1", "plan1", "task2", 'W/"4"'),
-    )
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.delete_project_plan_task("proj1", "plan1", "task2", 'W/"4"'),
+        )
 
-    assert result == {"success": True}
+    assert excinfo.value.http_status == 412
+    assert 'W/"5"' in str(excinfo.value)  # advanced ETag surfaced to the caller
+    # Exactly one DELETE (no blind replay) and a single re-read GET.
     deletes = [r for r in requests if r.method == "DELETE"]
-    assert [d.headers["If-Match"] for d in deletes] == ['W/"4"', 'W/"5"']
+    assert [d.headers["If-Match"] for d in deletes] == ['W/"4"']
+    assert len([r for r in requests if r.method == "GET"]) == 1
 
 
-def test_plan_update_recovers_from_stale_etag_412(monkeypatch) -> None:
+def test_plan_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> None:
     requests: list[httpx.Request] = []
     client = _make_client(
         monkeypatch,
@@ -563,16 +581,18 @@ def test_plan_update_recovers_from_stale_etag_412(monkeypatch) -> None:
         ),
     )
 
-    result = _run(
-        client,
-        lambda: client.update_project_plan(
-            "proj1", "plan1", {"status": "Active"}, 'W/"6"'
-        ),
-    )
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.update_project_plan(
+                "proj1", "plan1", {"status": "Active"}, 'W/"6"'
+            ),
+        )
 
-    assert result == {"Status": "Active"}
+    assert excinfo.value.http_status == 412
+    assert 'W/"7"' in str(excinfo.value)
     patches = [r for r in requests if r.method == "PATCH"]
-    assert [p.headers["If-Match"] for p in patches] == ['W/"6"', 'W/"7"']
+    assert [p.headers["If-Match"] for p in patches] == ['W/"6"']  # no replay
 
 
 def test_stale_etag_retry_gives_up_when_version_did_not_move(monkeypatch) -> None:
@@ -668,3 +688,116 @@ def test_task_mutation_409_with_active_plan_is_reraised_unchanged(monkeypatch) -
     # An Active plan means the 409 is some other invariant: keep it verbatim.
     assert "not Active" not in str(excinfo.value)
     assert generic in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Archive routing (PR #251 review): update_project_plan must never perform the
+# destructive archive that also cancels tasks -- that belongs to the separately
+# annotated archive_project_plan tool. The guard is case/whitespace-insensitive.
+# ---------------------------------------------------------------------------
+def test_update_project_plan_refuses_archived_status(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("archive must be rejected before any HTTP request")
+
+    client = _make_client(monkeypatch, handler)
+    for patch in (
+        {"status": "Archived"},
+        {"Status": "archived"},
+        {"status": " ARCHIVED "},
+    ):
+        with pytest.raises(ValueError, match="archive_project_plan"):
+            _run(
+                client,
+                lambda p=patch: client.update_project_plan("proj1", "plan1", p, 'W/"1"'),
+            )
+
+
+# ---------------------------------------------------------------------------
+# Task-patch key casing (PR #251 review): the live surface is case-insensitive,
+# but the client emits a deterministic camelCase body and rejects a field named
+# twice under different casing.
+# ---------------------------------------------------------------------------
+def test_task_update_normalizes_key_casing_to_camelcase(monkeypatch) -> None:
+    requests, handler = _recorder(response_json={"ok": True})
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.update_project_plan_task(
+            "proj1",
+            "plan1",
+            "task1",
+            {"Title": "New", "ASSIGNEDTOID": "u1", "produces": ["a"]},
+            'W/"1"',
+        ),
+    )
+
+    body = json.loads(requests[-1].content)
+    assert body == {"title": "New", "assignedToId": "u1", "produces": ["a"]}
+
+
+def test_task_update_rejects_keys_differing_only_by_casing(monkeypatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("ambiguous duplicate key must be rejected pre-flight")
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="duplicates field title"):
+        _run(
+            client,
+            lambda: client.update_project_plan_task(
+                "proj1", "plan1", "task1", {"title": "a", "Title": "b"}, 'W/"1"'
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Retry safety (PR #251 review): an ambiguous gateway failure (502/503/504) on
+# an unkeyed create must NOT be replayed -- it may already have committed and a
+# retry would duplicate it. An Idempotency-Key makes the create retry-safe.
+# ---------------------------------------------------------------------------
+def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            503, json={"Code": "ServiceUnavailable", "Message": "down"}
+        )
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.create_project_plan(
+                "proj1", {"configuringAgentName": "EmployeeSelfServiceHRCEA"}
+            ),
+        )
+
+    assert excinfo.value.http_status == 503
+    assert len([r for r in calls if r.method == "POST"]) == 1  # surfaced, not replayed
+
+
+def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
+    monkeypatch.setattr(client_module.asyncio, "sleep", _no_sleep)
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        if len([r for r in calls if r.method == "POST"]) == 1:
+            return httpx.Response(
+                503, json={"Code": "ServiceUnavailable", "Message": "down"}
+            )
+        return httpx.Response(200, json={"PlanId": "p1"})
+
+    client = _make_client(monkeypatch, handler)
+    result = _run(
+        client,
+        lambda: client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRCEA"}, "idem-1"
+        ),
+    )
+
+    assert result == {"PlanId": "p1"}
+    posts = [r for r in calls if r.method == "POST"]
+    assert len(posts) == 2  # an Idempotency-Key makes the create retry-safe
+    assert all("Idempotency-Key" in p.headers for p in posts)

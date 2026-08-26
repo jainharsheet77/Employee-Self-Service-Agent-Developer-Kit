@@ -342,6 +342,7 @@ class AgentConfigClient:
         path: str,
         *,
         transform_payload: bool = True,
+        idempotent: Optional[bool] = None,
         **kwargs: Any,
     ) -> Any:
         """Execute a request with bounded retry for transient responses.
@@ -351,7 +352,24 @@ class AgentConfigClient:
         EmployeeAgents surface is unchanged; the planner and role surfaces pass
         ``False`` because their responses carry user keys that must not be
         rewritten.
+
+        ``idempotent`` gates whether an *ambiguous* transient failure — a 502/
+        503/504 gateway error or a network ``RequestError`` that may have landed
+        server-side after committing — is safe to replay. When ``None`` it is
+        inferred: safe for read methods and for any mutation carrying an
+        ``If-Match`` or ``Idempotency-Key`` header, unsafe otherwise. An unsafe
+        create is surfaced instead of retried so a committed-but-unacknowledged
+        POST is never silently duplicated. A 429 is always retried because the
+        service rejects it before doing any work.
         """
+        if idempotent is None:
+            request_headers = kwargs.get("headers") or {}
+            retry_safe = method.upper() in ("GET", "HEAD", "OPTIONS") or any(
+                name.lower() in ("if-match", "idempotency-key")
+                for name in request_headers
+            )
+        else:
+            retry_safe = idempotent
         last_error: Optional[Exception] = None
         for attempt in range(self.max_retries):
             client = await self._ensure_client()
@@ -362,6 +380,12 @@ class AgentConfigClient:
                     503,
                     504,
                 ):
+                    if response.status_code != 429 and not retry_safe:
+                        # An ambiguous gateway failure on a non-idempotent
+                        # request (typically an unkeyed create) may already have
+                        # committed server-side; replaying it risks a duplicate,
+                        # so surface it instead of retrying.
+                        response.raise_for_status()
                     wait = (2**attempt) + random.uniform(0, 1)
                     last_error = AgentConfigApiError(
                         f"Transient HTTP {response.status_code}"
@@ -407,7 +431,7 @@ class AgentConfigClient:
 
             except httpx.RequestError as error:
                 last_error = error
-                if attempt < self.max_retries - 1:
+                if retry_safe and attempt < self.max_retries - 1:
                     await asyncio.sleep((2**attempt) + random.uniform(0, 1))
                     continue
                 raise
@@ -440,6 +464,7 @@ class AgentConfigClient:
             "POST",
             f"{self._collection_path()}/SearchAgents",
             json={"SearchString": normalized},
+            idempotent=True,
         )
         return self._unwrap_collection(payload)
 
@@ -475,12 +500,14 @@ class AgentConfigClient:
             "PATCH",
             self._agent_path(title_id),
             json=_to_api_payload(config),
+            idempotent=True,
         )
 
     async def delete_agent_config(self, title_id: str) -> dict[str, Any]:
         return await self._request(
             "DELETE",
             self._agent_path(title_id),
+            idempotent=True,
         )
 
     async def view_agent_icon(self, title_id: str) -> dict[str, Any]:

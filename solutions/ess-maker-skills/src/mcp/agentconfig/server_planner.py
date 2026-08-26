@@ -55,12 +55,13 @@ mcp = FastMCP(
         "role attestation. Identity and tenant come from the access token and "
         "are never tool arguments. For any PATCH/DELETE, read the exact entity "
         "first and pass its current ETag as ``etag`` (sent as If-Match). The "
-        "server self-heals the two conflicts this surface produces: on a stale "
-        "ETag it re-reads the entity and retries the mutation once with the "
-        "fresh ETag, and when a task mutation is blocked because its parent "
-        "plan is not Active it returns an actionable message telling you to "
-        "activate the plan first. Projects and plans have no DELETE route — "
-        "archive them instead; only tasks can be deleted."
+        "server turns the two conflicts this surface produces into actionable "
+        "errors: on a stale ETag (412) it tells you the entity changed since "
+        "you read it and to re-read and reapply — it never silently replays "
+        "your write over another edit — and when a task mutation is blocked "
+        "because its parent plan is not Active it returns an actionable message "
+        "telling you to activate the plan first. Projects and plans have no "
+        "DELETE route — archive them instead; only tasks can be deleted."
     ),
 )
 
@@ -82,9 +83,10 @@ def _format(data: Any) -> str:
 # AgentConfiguration project / plan / task tools (WeveNova beta surface).
 # Identity and tenant come from the access token; they are never tool args.
 # For any PATCH/DELETE, read the exact entity first and pass its current
-# ETag as ``etag`` (sent as If-Match). The client re-reads and retries the
-# mutation once automatically on a stale-ETag (412) conflict, and turns the
-# "parent plan not Active" task conflict (409) into an actionable message.
+# ETag as ``etag`` (sent as If-Match). On a stale-ETag (412) conflict the
+# client surfaces an actionable "the entity changed, re-read and reapply"
+# error instead of replaying the write, and turns the "parent plan not
+# Active" task conflict (409) into an actionable message.
 # ----------------------------------------------------------------------
 
 
@@ -178,8 +180,9 @@ async def update_project_plan(
     {"acceptanceCriteria": [...]}, or {"context": [...]}. Send a lifecycle field
     (status or ownedById) on its own — it cannot be combined with the other
     lifecycle field or with an acceptanceCriteria/context edit in one PATCH.
-    Only the plan owner may change status. Requires the plan's current ETag; a
-    stale ETag is re-read and retried once automatically."""
+    Only the plan owner may change status. Requires the plan's current ETag; if
+    it is stale the call fails with an actionable 412 telling you to re-read the
+    plan and reapply your change (the write is never silently replayed)."""
     return _format(
         await get_client().update_project_plan(projectId, planId, patch, etag)
     )
@@ -293,8 +296,9 @@ async def update_project_plan_task(
     unassigns) — it cannot be combined with a title/description/produces/consumes
     edit in one PATCH. Use set_project_plan_task_state or
     complete_project_plan_task for state and outputs. Requires the task's current
-    ETag; a stale ETag is re-read and retried once, and a non-Active parent plan
-    yields an actionable "activate the plan first" message."""
+    ETag; a stale ETag fails with an actionable 412 to re-read and reapply (never
+    silently replayed), and a non-Active parent plan yields an actionable
+    "activate the plan first" message."""
     return _format(
         await get_client().update_project_plan_task(
             projectId, planId, taskId, patch, etag
@@ -314,9 +318,9 @@ async def set_project_plan_task_state(
     InProgress, Completed, Cancelled). A task must be InProgress before it can
     be Completed, and the parent plan must be Active. Use
     complete_project_plan_task when completion must capture outputs. Requires
-    the task's current ETag; a stale ETag is re-read and retried once, and a
-    non-Active parent plan yields an actionable "activate the plan first"
-    message."""
+    the task's current ETag; a stale ETag fails with an actionable 412 to
+    re-read and reapply (never silently replayed), and a non-Active parent plan
+    yields an actionable "activate the plan first" message."""
     return _format(
         await get_client().set_project_plan_task_state(
             projectId, planId, taskId, state, etag
@@ -336,8 +340,9 @@ async def complete_project_plan_task(
     ledger. Each output needs key, kind (Custom|Environment|Connection|
     KnowledgeSource), and attributes [{key, value, description?}]; Environment
     outputs require a non-empty environmentId attribute. Requires the task's
-    current ETag; a stale ETag is re-read and retried once, and a non-Active
-    parent plan yields an actionable "activate the plan first" message."""
+    current ETag; a stale ETag fails with an actionable 412 to re-read and
+    reapply (never silently replayed), and a non-Active parent plan yields an
+    actionable "activate the plan first" message."""
     return _format(
         await get_client().complete_project_plan_task(
             projectId, planId, taskId, outputs, etag
@@ -353,9 +358,10 @@ async def delete_project_plan_task(
     etag: str,
 ) -> str:
     """Permanently delete one task (the only project-plan resource with a DELETE
-    route). Requires the task's current ETag; a stale ETag is re-read and
-    retried once, and a non-Active parent plan yields an actionable "activate
-    the plan first" message."""
+    route). Requires the task's current ETag; a stale ETag fails with an
+    actionable 412 to re-read and reapply (never silently replayed), and a
+    non-Active parent plan yields an actionable "activate the plan first"
+    message."""
     return _format(
         await get_client().delete_project_plan_task(projectId, planId, taskId, etag)
     )

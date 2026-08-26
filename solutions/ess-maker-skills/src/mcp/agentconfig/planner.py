@@ -151,14 +151,17 @@ class PlannerMixin:
         surface produces so a planner agent need not hand-roll the retry dance.
 
         * **412 Precondition Failed** (stale/mismatched ETag): re-read the
-          entity via ``refetch`` and, when its ETag has actually moved, replay
-          the mutation once with the fresh value. WeveNova bumps a task's
-          version as a side effect of ledger reconciliation (for example,
-          completing a producer task reconciles an artifact a consumer task
-          references), so an ETag a caller just read can go stale through no
-          edit of its own. The retry is bounded to one attempt; if the ETag
-          did not move, the original 412 is re-raised unchanged so a genuine
-          lost-update conflict is never silently clobbered.
+          entity via ``refetch`` to surface an actionable error. WeveNova bumps
+          a task's version as a side effect of ledger reconciliation (for
+          example, completing a producer task reconciles an artifact a consumer
+          task references), so an ETag a caller just read can go stale through
+          no edit of its own — but that benign bump is indistinguishable from a
+          concurrent edit to the very fields being written. Rather than blindly
+          replay the mutation against the fresh ETag (which would defeat the
+          ``If-Match`` lost-update guard and could silently clobber another
+          writer's change), the precondition failure is preserved: the caller
+          is told the ETag advanced and must re-read and reapply the change if
+          it is still needed.
         * **409 Conflict** on a task mutation (``plan_refetch`` supplied): the
           dominant cause is the parent plan not being Active —
           ``EnsureParentPlanIsActive`` makes tasks read-only under a non-Active
@@ -183,7 +186,20 @@ class PlannerMixin:
                 entity = await refetch()
                 fresh = _entity_scalar(entity, "ETag", "@odata.etag")
                 if fresh and _normalize_etag(fresh) != _normalize_etag(etag):
-                    return await _perform(fresh)
+                    # The entity was modified after the caller read it (its ETag
+                    # advanced). A benign ledger-reconciliation version bump is
+                    # indistinguishable here from a concurrent edit to the same
+                    # fields, so replaying the mutation against the fresh ETag
+                    # could silently overwrite another writer's work. Preserve
+                    # the precondition failure and let the caller re-read and
+                    # decide whether the change is still needed.
+                    raise AgentConfigApiError(
+                        "The entity changed since you read it (its ETag advanced "
+                        f"from {etag} to {fresh}). Re-read it to get the current "
+                        "ETag and state, then reapply your change if it is still "
+                        "needed.",
+                        http_status=412,
+                    ) from error
                 raise
             if error.http_status == 409 and plan_refetch is not None:
                 plan = await plan_refetch()
@@ -291,6 +307,17 @@ class PlannerMixin:
     ) -> Any:
         if not isinstance(patch, dict) or not patch:
             raise ValueError("patch must be a non-empty object")
+        for key, value in patch.items():
+            if (
+                key.strip().lower() == "status"
+                and isinstance(value, str)
+                and value.strip().lower() == _PLAN_ARCHIVE_STATUS.lower()
+            ):
+                raise ValueError(
+                    "Refusing to archive a plan through update_project_plan; "
+                    "archiving also cancels the plan's tasks. Use "
+                    "archive_project_plan for that destructive operation."
+                )
         return await self._mutate_with_etag_recovery(
             "PATCH",
             self._plan_url(project_id, plan_id),
@@ -422,19 +449,35 @@ class PlannerMixin:
     ) -> Any:
         if not isinstance(patch, dict) or not patch:
             raise ValueError("patch must be a non-empty object")
-        allowed = {field.lower() for field in _TASK_UPDATE_FIELDS}
-        for key in patch:
-            if key.lower() not in allowed:
+        canonical = {field.lower(): field for field in _TASK_UPDATE_FIELDS}
+        normalized: dict[str, Any] = {}
+        for key, value in patch.items():
+            field = canonical.get(key.lower())
+            if field is None:
                 raise ValueError(
                     f"patch.{key} is not accepted here; use "
                     "set_project_plan_task_state or complete_project_plan_task "
                     "for lifecycle changes"
                 )
+            if field in normalized:
+                raise ValueError(
+                    f"patch.{key} duplicates field {field}"
+                )
+            # Emit the canonical camelCase key regardless of how the caller
+            # cased it. The live surface deserializes these field names
+            # case-insensitively (a PATCH sending "Title" lands identically to
+            # "title"), so normalization is not required for the write to
+            # apply; it keeps the emitted body a deterministic camelCase shape
+            # consistent with the rest of this client and stays correct if the
+            # backend ever tightens to case-sensitive parsing. Combined with the
+            # duplicate check above it also rejects a patch that names one field
+            # twice under different casing.
+            normalized[field] = value
         return await self._mutate_with_etag_recovery(
             "PATCH",
             self._task_url(project_id, plan_id, task_id),
             etag=etag,
-            json_body=patch,
+            json_body=normalized,
             refetch=lambda: self.get_project_plan_task(project_id, plan_id, task_id),
             plan_refetch=lambda: self.get_project_plan(project_id, plan_id),
         )
