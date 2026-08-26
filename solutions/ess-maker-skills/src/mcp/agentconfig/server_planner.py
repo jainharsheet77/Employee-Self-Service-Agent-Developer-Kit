@@ -115,8 +115,10 @@ async def create_agent_configuration_project(
     idempotencyKey: Optional[str] = None,
 ) -> str:
     """Get-or-create a project by name (case/whitespace-insensitive). Supported
-    names: {"name": "Employee Self Serve"} or {"name": "Workforce Insights"};
-    optional ownedById? and metadata?. An unsupported name is rejected (400)."""
+    names: {"name": "Employee Self-Service"} or {"name": "Workforce Insights"};
+    optional ownedById? and metadata?. An unsupported name is rejected (400
+    ValidationError "name must be one of the supported configuration
+    experiences: Employee Self-Service, Workforce Insights")."""
     return _format(
         await get_client().create_agent_configuration_project(project, idempotencyKey)
     )
