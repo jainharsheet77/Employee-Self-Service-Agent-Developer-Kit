@@ -113,6 +113,41 @@ def _mutation_headers(
     return headers
 
 
+def _normalize_etag(value: Optional[str]) -> Optional[str]:
+    """Normalize an ETag for equality comparison only.
+
+    Strips a weak-validator ``W/`` prefix and surrounding quotes so that the
+    same version rendered as ``W/"3"``, ``"3"``, or ``3`` compares equal. This
+    is used to decide whether a re-read entity's ETag actually moved; it is not
+    the value sent back on the wire (the caller's original ETag string is).
+    """
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if trimmed[:2].lower() == "w/":
+        trimmed = trimmed[2:].strip()
+    return trimmed.strip('"')
+
+
+def _entity_scalar(entity: Any, *names: str) -> Optional[str]:
+    """Case-insensitively read the first present non-empty string field.
+
+    WeveNova renders entity bodies in PascalCase (``ETag``, ``Status``) while
+    OData also permits the ``@odata.etag`` annotation; callers pass every
+    accepted spelling and get back the first non-empty match.
+    """
+    if not isinstance(entity, dict):
+        return None
+    lowered = {
+        key.lower(): item for key, item in entity.items() if isinstance(key, str)
+    }
+    for name in names:
+        item = lowered.get(name.lower())
+        if isinstance(item, str) and item:
+            return item
+    return None
+
+
 def _build_query_params(query: Optional[dict[str, Any]]) -> dict[str, str]:
     """Map friendly OData option names (filter/top/...) to ``$``-prefixed params."""
     if query is None:

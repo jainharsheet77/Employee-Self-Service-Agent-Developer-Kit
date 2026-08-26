@@ -54,9 +54,13 @@ mcp = FastMCP(
         "Drive WeveNova AgentConfiguration projects, plans, tasks, and plan "
         "role attestation. Identity and tenant come from the access token and "
         "are never tool arguments. For any PATCH/DELETE, read the exact entity "
-        "first and pass its current ETag as ``etag`` (sent as If-Match); retry "
-        "at most once on an ETag conflict. Projects and plans have no DELETE "
-        "route — archive them instead; only tasks can be deleted."
+        "first and pass its current ETag as ``etag`` (sent as If-Match). The "
+        "server self-heals the two conflicts this surface produces: on a stale "
+        "ETag it re-reads the entity and retries the mutation once with the "
+        "fresh ETag, and when a task mutation is blocked because its parent "
+        "plan is not Active it returns an actionable message telling you to "
+        "activate the plan first. Projects and plans have no DELETE route — "
+        "archive them instead; only tasks can be deleted."
     ),
 )
 
@@ -78,7 +82,9 @@ def _format(data: Any) -> str:
 # AgentConfiguration project / plan / task tools (WeveNova beta surface).
 # Identity and tenant come from the access token; they are never tool args.
 # For any PATCH/DELETE, read the exact entity first and pass its current
-# ETag as ``etag`` (sent as If-Match); retry at most once on an ETag conflict.
+# ETag as ``etag`` (sent as If-Match). The client re-reads and retries the
+# mutation once automatically on a stale-ETag (412) conflict, and turns the
+# "parent plan not Active" task conflict (409) into an actionable message.
 # ----------------------------------------------------------------------
 
 
@@ -163,7 +169,8 @@ async def update_project_plan(
     """Patch plan fields or dispatch a lifecycle change. Activate a Draft plan
     with patch {"status": "Active"}; also supports {"status": "Completed"},
     {"ownedById": ...}, {"acceptanceCriteria": [...]}, or {"context": [...]}.
-    Only the plan owner may change status. Requires the plan's current ETag."""
+    Only the plan owner may change status. Requires the plan's current ETag; a
+    stale ETag is re-read and retried once automatically."""
     return _format(
         await get_client().update_project_plan(projectId, planId, patch, etag)
     )
@@ -272,7 +279,8 @@ async def update_project_plan_task(
     description, assignedToId, produces, consumes. To claim a role-pooled task,
     send patch {"assignedToId": "<user-aad-id>"}. Use set_project_plan_task_state
     or complete_project_plan_task for lifecycle changes. Requires the task's
-    current ETag."""
+    current ETag; a stale ETag is re-read and retried once, and a non-Active
+    parent plan yields an actionable "activate the plan first" message."""
     return _format(
         await get_client().update_project_plan_task(
             projectId, planId, taskId, patch, etag
@@ -292,7 +300,9 @@ async def set_project_plan_task_state(
     InProgress, Completed, Cancelled). A task must be InProgress before it can
     be Completed, and the parent plan must be Active. Use
     complete_project_plan_task when completion must capture outputs. Requires
-    the task's current ETag."""
+    the task's current ETag; a stale ETag is re-read and retried once, and a
+    non-Active parent plan yields an actionable "activate the plan first"
+    message."""
     return _format(
         await get_client().set_project_plan_task_state(
             projectId, planId, taskId, state, etag
@@ -312,7 +322,8 @@ async def complete_project_plan_task(
     ledger. Each output needs key, kind (Custom|Environment|Connection|
     KnowledgeSource), and attributes [{key, value, description?}]; Environment
     outputs require a non-empty environmentId attribute. Requires the task's
-    current ETag."""
+    current ETag; a stale ETag is re-read and retried once, and a non-Active
+    parent plan yields an actionable "activate the plan first" message."""
     return _format(
         await get_client().complete_project_plan_task(
             projectId, planId, taskId, outputs, etag
@@ -328,7 +339,9 @@ async def delete_project_plan_task(
     etag: str,
 ) -> str:
     """Permanently delete one task (the only project-plan resource with a DELETE
-    route). Requires the task's current ETag."""
+    route). Requires the task's current ETag; a stale ETag is re-read and
+    retried once, and a non-Active parent plan yields an actionable "activate
+    the plan first" message."""
     return _format(
         await get_client().delete_project_plan_task(projectId, planId, taskId, etag)
     )

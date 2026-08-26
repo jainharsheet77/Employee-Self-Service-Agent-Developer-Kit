@@ -14,14 +14,16 @@ untransformed (``transform_payload=False``).
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from client import AgentConfigApiError
 from roles import ATTESTABLE_ROLES
 from _odata import (
     _build_query_params,
+    _entity_scalar,
     _escape_odata_literal,
     _mutation_headers,
+    _normalize_etag,
     _require_odata_id,
 )
 
@@ -133,6 +135,72 @@ class PlannerMixin:
         )
 
     # ------------------------------------------------------------------
+    # ETag / plan-state conflict recovery
+    # ------------------------------------------------------------------
+    async def _mutate_with_etag_recovery(
+        self,
+        method: str,
+        url: str,
+        *,
+        etag: str,
+        refetch: Callable[[], Awaitable[Any]],
+        json_body: Optional[dict[str, Any]] = None,
+        plan_refetch: Optional[Callable[[], Awaitable[Any]]] = None,
+    ) -> Any:
+        """Run an If-Match mutation, recovering from the two conflicts this
+        surface produces so a planner agent need not hand-roll the retry dance.
+
+        * **412 Precondition Failed** (stale/mismatched ETag): re-read the
+          entity via ``refetch`` and, when its ETag has actually moved, replay
+          the mutation once with the fresh value. WeveNova bumps a task's
+          version as a side effect of ledger reconciliation (for example,
+          completing a producer task reconciles an artifact a consumer task
+          references), so an ETag a caller just read can go stale through no
+          edit of its own. The retry is bounded to one attempt; if the ETag
+          did not move, the original 412 is re-raised unchanged so a genuine
+          lost-update conflict is never silently clobbered.
+        * **409 Conflict** on a task mutation (``plan_refetch`` supplied): the
+          dominant cause is the parent plan not being Active —
+          ``EnsureParentPlanIsActive`` makes tasks read-only under a non-Active
+          plan, and the backend returns a generic conflict message. Re-read the
+          plan and, when it is not Active, surface an actionable message;
+          otherwise re-raise the original error untouched.
+        """
+
+        async def _perform(active_etag: str) -> Any:
+            return await self._request(
+                method,
+                url,
+                json=json_body,
+                headers=_mutation_headers(etag=active_etag),
+                transform_payload=False,
+            )
+
+        try:
+            return await _perform(etag)
+        except AgentConfigApiError as error:
+            if error.http_status == 412:
+                entity = await refetch()
+                fresh = _entity_scalar(entity, "ETag", "@odata.etag")
+                if fresh and _normalize_etag(fresh) != _normalize_etag(etag):
+                    return await _perform(fresh)
+                raise
+            if error.http_status == 409 and plan_refetch is not None:
+                plan = await plan_refetch()
+                status = _entity_scalar(plan, "Status")
+                if status is not None and status.lower() != "active":
+                    raise AgentConfigApiError(
+                        f"The parent plan is '{status}', not Active, so its "
+                        "tasks are read-only. Activate the plan with "
+                        'update_project_plan patch {"status": "Active"} (plan '
+                        "owner only) before updating, transitioning, "
+                        "completing, or deleting its tasks.",
+                        http_status=409,
+                    ) from error
+                raise
+            raise
+
+    # ------------------------------------------------------------------
     # Projects
     # ------------------------------------------------------------------
     async def list_agent_configuration_projects(
@@ -171,12 +239,12 @@ class PlannerMixin:
     async def archive_agent_configuration_project(
         self, project_id: str, etag: str
     ) -> Any:
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "PATCH",
             self._project_url(project_id),
-            json={"state": _PROJECT_ARCHIVE_STATE},
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            json_body={"state": _PROJECT_ARCHIVE_STATE},
+            refetch=lambda: self.get_agent_configuration_project(project_id),
         )
 
     # ------------------------------------------------------------------
@@ -223,23 +291,23 @@ class PlannerMixin:
     ) -> Any:
         if not isinstance(patch, dict) or not patch:
             raise ValueError("patch must be a non-empty object")
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "PATCH",
             self._plan_url(project_id, plan_id),
-            json=patch,
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            json_body=patch,
+            refetch=lambda: self.get_project_plan(project_id, plan_id),
         )
 
     async def archive_project_plan(
         self, project_id: str, plan_id: str, etag: str
     ) -> Any:
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "PATCH",
             self._plan_url(project_id, plan_id),
-            json={"status": _PLAN_ARCHIVE_STATUS},
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            json_body={"status": _PLAN_ARCHIVE_STATUS},
+            refetch=lambda: self.get_project_plan(project_id, plan_id),
         )
 
     # ------------------------------------------------------------------
@@ -362,12 +430,13 @@ class PlannerMixin:
                     "set_project_plan_task_state or complete_project_plan_task "
                     "for lifecycle changes"
                 )
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "PATCH",
             self._task_url(project_id, plan_id, task_id),
-            json=patch,
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            json_body=patch,
+            refetch=lambda: self.get_project_plan_task(project_id, plan_id, task_id),
+            plan_refetch=lambda: self.get_project_plan(project_id, plan_id),
         )
 
     async def set_project_plan_task_state(
@@ -380,12 +449,13 @@ class PlannerMixin:
     ) -> Any:
         if state not in _TASK_STATES:
             raise ValueError(f"state must be one of {', '.join(_TASK_STATES)}")
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "PATCH",
             self._task_url(project_id, plan_id, task_id),
-            json={"state": state},
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            json_body={"state": state},
+            refetch=lambda: self.get_project_plan_task(project_id, plan_id, task_id),
+            plan_refetch=lambda: self.get_project_plan(project_id, plan_id),
         )
 
     async def complete_project_plan_task(
@@ -397,20 +467,22 @@ class PlannerMixin:
         etag: str,
     ) -> Any:
         normalized = _normalize_completion_outputs(outputs)
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "PATCH",
             self._task_url(project_id, plan_id, task_id),
-            json={"state": "Completed", "outputs": normalized},
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            json_body={"state": "Completed", "outputs": normalized},
+            refetch=lambda: self.get_project_plan_task(project_id, plan_id, task_id),
+            plan_refetch=lambda: self.get_project_plan(project_id, plan_id),
         )
 
     async def delete_project_plan_task(
         self, project_id: str, plan_id: str, task_id: str, etag: str
     ) -> Any:
-        return await self._request(
+        return await self._mutate_with_etag_recovery(
             "DELETE",
             self._task_url(project_id, plan_id, task_id),
-            headers=_mutation_headers(etag=etag),
-            transform_payload=False,
+            etag=etag,
+            refetch=lambda: self.get_project_plan_task(project_id, plan_id, task_id),
+            plan_refetch=lambda: self.get_project_plan(project_id, plan_id),
         )

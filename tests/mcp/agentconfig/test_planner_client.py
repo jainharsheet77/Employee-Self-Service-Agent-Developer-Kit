@@ -475,3 +475,196 @@ def test_attestable_roles_constant_is_the_provider_owned_set() -> None:
         "ServiceNowAdmin",
         "ServiceNowKnowledgeManager",
     )
+
+
+# ---------------------------------------------------------------------------
+# ETag / plan-state conflict recovery
+#
+# WeveNova returns 412 PreconditionFailed for a stale/mismatched If-Match and
+# 409 Conflict when a task mutation targets a non-Active plan. The client
+# re-reads and retries once on the former and turns the latter into an
+# actionable message; these tests pin both paths through MockTransport.
+# ---------------------------------------------------------------------------
+def _stale_then_ok_handler(requests, mutate_method, retry_response, refetch_json):
+    """Handler: first mutation -> 412, re-GET -> refetch_json, retry -> ok."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == mutate_method:
+            attempts = [r for r in requests if r.method == mutate_method]
+            if len(attempts) == 1:
+                return httpx.Response(
+                    412, json={"Code": "PreconditionFailed", "Message": "stale"}
+                )
+            return retry_response
+        if request.method == "GET":
+            return httpx.Response(200, json=refetch_json)
+        return httpx.Response(200, json={})
+
+    return handler
+
+
+def test_task_update_recovers_from_stale_etag_412(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    client = _make_client(
+        monkeypatch,
+        _stale_then_ok_handler(
+            requests, "PATCH", httpx.Response(200, json={"ok": True}), {"ETag": 'W/"2"'}
+        ),
+    )
+
+    result = _run(
+        client,
+        lambda: client.update_project_plan_task(
+            "proj1", "plan1", "task1", {"title": "New"}, 'W/"1"'
+        ),
+    )
+
+    assert result == {"ok": True}
+    patches = [r for r in requests if r.method == "PATCH"]
+    assert [p.headers["If-Match"] for p in patches] == ['W/"1"', 'W/"2"']
+    # The retry replays the exact same body, only the ETag advances.
+    assert json.loads(patches[1].content) == {"title": "New"}
+    gets = [r for r in requests if r.method == "GET"]
+    assert len(gets) == 1
+    assert str(gets[0].url).endswith("agentPlanTasks('task1')")
+
+
+def test_task_delete_recovers_from_stale_etag_412(monkeypatch) -> None:
+    # Mirrors the live smoke case: completing a producer task bumps a consumer
+    # task's version, so its create-time ETag is stale by delete time.
+    requests: list[httpx.Request] = []
+    client = _make_client(
+        monkeypatch,
+        _stale_then_ok_handler(
+            requests, "DELETE", httpx.Response(204), {"ETag": 'W/"5"'}
+        ),
+    )
+
+    result = _run(
+        client,
+        lambda: client.delete_project_plan_task("proj1", "plan1", "task2", 'W/"4"'),
+    )
+
+    assert result == {"success": True}
+    deletes = [r for r in requests if r.method == "DELETE"]
+    assert [d.headers["If-Match"] for d in deletes] == ['W/"4"', 'W/"5"']
+
+
+def test_plan_update_recovers_from_stale_etag_412(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    client = _make_client(
+        monkeypatch,
+        _stale_then_ok_handler(
+            requests,
+            "PATCH",
+            httpx.Response(200, json={"Status": "Active"}),
+            {"ETag": 'W/"7"', "Status": "Draft"},
+        ),
+    )
+
+    result = _run(
+        client,
+        lambda: client.update_project_plan(
+            "proj1", "plan1", {"status": "Active"}, 'W/"6"'
+        ),
+    )
+
+    assert result == {"Status": "Active"}
+    patches = [r for r in requests if r.method == "PATCH"]
+    assert [p.headers["If-Match"] for p in patches] == ['W/"6"', 'W/"7"']
+
+
+def test_stale_etag_retry_gives_up_when_version_did_not_move(monkeypatch) -> None:
+    # A 412 whose re-read ETag is unchanged is a genuine precondition failure,
+    # not reconciliation drift: re-raise it rather than loop or clobber.
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(
+                412, json={"Code": "PreconditionFailed", "Message": "stale"}
+            )
+        if request.method == "GET":
+            return httpx.Response(200, json={"ETag": 'W/"1"'})
+        return httpx.Response(200, json={})
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.update_project_plan_task(
+                "proj1", "plan1", "task1", {"title": "X"}, 'W/"1"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 412
+    assert len([r for r in requests if r.method == "PATCH"]) == 1
+
+
+def test_task_mutation_on_non_active_plan_gets_actionable_409(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    generic = (
+        "The request could not be completed due to a conflict with the "
+        "current state of the resource."
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(409, json={"Code": "Conflict", "Message": generic})
+        if request.method == "GET":
+            return httpx.Response(200, json={"Status": "Draft", "ETag": 'W/"1"'})
+        return httpx.Response(200, json={})
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.set_project_plan_task_state(
+                "proj1", "plan1", "task1", "InProgress", 'W/"1"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 409
+    message = str(excinfo.value)
+    assert "not Active" in message
+    assert "update_project_plan" in message and '"status": "Active"' in message
+    # The clarifier re-reads the plan (not the task) to learn the status.
+    gets = [r for r in requests if r.method == "GET"]
+    assert len(gets) == 1
+    assert str(gets[0].url).endswith("agentPlans('plan1')")
+
+
+def test_task_mutation_409_with_active_plan_is_reraised_unchanged(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+    generic = (
+        "The request could not be completed due to a conflict with the "
+        "current state of the resource."
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.method == "PATCH":
+            return httpx.Response(409, json={"Code": "Conflict", "Message": generic})
+        if request.method == "GET":
+            return httpx.Response(200, json={"Status": "Active", "ETag": 'W/"9"'})
+        return httpx.Response(200, json={})
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+        _run(
+            client,
+            lambda: client.set_project_plan_task_state(
+                "proj1", "plan1", "task1", "InProgress", 'W/"9"'
+            ),
+        )
+
+    assert excinfo.value.http_status == 409
+    # An Active plan means the 409 is some other invariant: keep it verbatim.
+    assert "not Active" not in str(excinfo.value)
+    assert generic in str(excinfo.value)
