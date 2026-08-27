@@ -232,7 +232,7 @@ def test_configure_contextual_server_preserves_other_servers_and_inputs(
 def test_shipped_contextual_descriptors_render_complete_servers(
     tmp_path: Path,
 ) -> None:
-    for name in ("dataverse", "servicenow"):
+    for name in ("dataverse", "servicenow", "agentconfig"):
         source = SOLUTION_ROOT / "src" / "mcp" / name / "mcp.server.json"
         destination = tmp_path / "src" / "mcp" / name / "mcp.server.json"
         destination.parent.mkdir(parents=True)
@@ -248,6 +248,7 @@ def test_shipped_contextual_descriptors_render_complete_servers(
         ["--instance-url", "https://example.service-now.com/"],
         tmp_path,
     )
+    mcp_config.configure_server("landing-page", [], tmp_path)
     config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
 
     assert config["servers"]["Dataverse"] == {
@@ -266,6 +267,112 @@ def test_shipped_contextual_descriptors_render_complete_servers(
     assert config["servers"]["ServiceNow"]["command"] == str(
         Path(sys.executable).resolve()
     )
+    assert config["servers"]["ess-landing-page-config"] == {
+        "command": str(Path(sys.executable).resolve()),
+        "args": ["server.py"],
+        "cwd": "${workspaceFolder}/src/mcp/agentconfig",
+    }
+
+
+def test_configure_applies_env_overrides_and_survives_materialize_defaults(
+    tmp_path: Path,
+) -> None:
+    for relative in (mcp_config.DEFAULTS_PATH, Path("src/mcp/agentconfig/mcp.server.json")):
+        destination = tmp_path / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(SOLUTION_ROOT / relative, destination)
+
+    mcp_config.materialize_defaults(tmp_path)
+    configured = mcp_config.configure_server(
+        "landing-page",
+        [
+            "--env",
+            "VORPAL_WIDGET_ORIGIN=https://widgets.example.com",
+            "--env",
+            "AGENTCONFIG_BASE_URL=https://api.example.com/v1.1",
+        ],
+        tmp_path,
+    )
+    rematerialized = mcp_config.materialize_defaults(tmp_path)
+    config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
+
+    assert configured["action"] == "updated"
+    assert config["servers"]["ess-landing-page-config"]["env"] == {
+        "VORPAL_WIDGET_ORIGIN": "https://widgets.example.com",
+        "AGENTCONFIG_BASE_URL": "https://api.example.com/v1.1",
+    }
+    assert rematerialized["preservedServerOverrides"] == ["ess-landing-page-config"]
+
+
+def test_configure_merges_env_overrides_into_descriptor_env(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "src/mcp/example/mcp.server.json",
+        {
+            "id": "example",
+            "serverName": "Example",
+            "parameters": {
+                "endpoint": {
+                    "argument": "--endpoint",
+                    "format": "https-url",
+                    "required": True,
+                }
+            },
+            "server": {
+                "command": "python",
+                "env": {"EXAMPLE_ENDPOINT": "{endpoint}", "EXAMPLE_MODE": "default"},
+            },
+        },
+    )
+
+    mcp_config.configure_server(
+        "example",
+        ["--endpoint", "https://example.com", "--env", "EXAMPLE_MODE=override"],
+        tmp_path,
+    )
+    config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
+
+    assert config["servers"]["Example"]["env"] == {
+        "EXAMPLE_ENDPOINT": "https://example.com",
+        "EXAMPLE_MODE": "override",
+    }
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("NOT_A_PAIR", "expects NAME=VALUE"),
+        ("2INVALID=value", "name must match"),
+        ("HAS SPACE=value", "name must match"),
+    ],
+)
+def test_configure_rejects_malformed_env_overrides(
+    tmp_path: Path,
+    value: str,
+    message: str,
+) -> None:
+    _write_json(
+        tmp_path / "src/mcp/example/mcp.server.json",
+        {"id": "example", "serverName": "Example", "server": {"command": "python"}},
+    )
+
+    with pytest.raises(mcp_config.McpConfigError, match=message):
+        mcp_config.configure_server("example", ["--env", value], tmp_path)
+
+    assert not (tmp_path / mcp_config.CONFIG_PATH).exists()
+
+
+def test_configure_rejects_repeated_env_name(tmp_path: Path) -> None:
+    _write_json(
+        tmp_path / "src/mcp/example/mcp.server.json",
+        {"id": "example", "serverName": "Example", "server": {"command": "python"}},
+    )
+
+    with pytest.raises(mcp_config.McpConfigError, match="was supplied twice"):
+        mcp_config.configure_server(
+            "example",
+            ["--env", "NAME=first", "--env", "NAME=second"],
+            tmp_path,
+        )
 
 
 def test_shipped_defaults_materialize_the_active_python_interpreter(
