@@ -14,6 +14,7 @@ call - and only token-derived identity - through to the client layer.
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 import sys
 import warnings
@@ -25,14 +26,24 @@ from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 
 REPO_ROOT = Path(__file__).parents[3]
-AGENTCONFIG_DIR = (
-    REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "agentconfig"
+PLANNER_DIR = (
+    REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "planner"
 )
-sys.path.insert(0, str(AGENTCONFIG_DIR))
+sys.path.insert(0, str(PLANNER_DIR))
 
+# Both this server and the landing-page server are the file ``server.py`` in
+# their own folder; each runs as its own process in production, but under
+# pytest they share one interpreter, so a plain ``import server`` would collide
+# in ``sys.modules`` with whichever server.py was imported first. Load this one
+# from its path under a unique module name to keep the two servers isolated.
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", IncompleteFieldDefinitionWarning)
-    import server_planner as planner_server  # noqa: E402
+    _spec = importlib.util.spec_from_file_location(
+        "planner_server", str(PLANNER_DIR / "server.py")
+    )
+    planner_server = importlib.util.module_from_spec(_spec)
+    sys.modules["planner_server"] = planner_server
+    _spec.loader.exec_module(planner_server)  # noqa: E402
 
 
 # tool -> (all properties, required subset). Identity/tenant are never present.

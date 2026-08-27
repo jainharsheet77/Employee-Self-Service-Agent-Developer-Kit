@@ -3,7 +3,7 @@
 
 """WeveNova project / plan / task endpoints (AgentConfiguration beta).
 
-``PlannerMixin`` is composed onto the base ``AgentConfigClient`` (see
+``PlannerMixin`` is composed onto the neutral ``WeveClient`` core (see
 ``planner_client.py``) and reuses its bearer auth, tenant decode, httpx
 session, and retrying ``_request``. These routes live on the beta base
 (``.../api/beta/me/agentConfigurationProjects``) and are addressed with
@@ -14,11 +14,17 @@ untransformed (``transform_payload=False``).
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any, Awaitable, Callable, Optional
 
-from client import AgentConfigApiError
-from roles import ATTESTABLE_ROLES
-from _odata import (
+# Import the neutral core from the sibling ``weve`` folder (flat sys.path; no
+# package __init__.py under src/mcp, each server launches with its own cwd).
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weve")
+)
+
+from _odata import (  # noqa: E402
     _build_query_params,
     _entity_scalar,
     _escape_odata_literal,
@@ -26,6 +32,9 @@ from _odata import (
     _normalize_etag,
     _require_odata_id,
 )
+from weve_client import AgentConfigApiError  # noqa: E402
+
+from roles import ATTESTABLE_ROLES  # noqa: E402
 
 _AGENT_PROJECTS_COLLECTION = "me/agentConfigurationProjects"
 _PLANS_RESOURCE = "agentPlans"
@@ -244,6 +253,10 @@ class PlannerMixin:
     ) -> Any:
         if not isinstance(project, dict):
             raise ValueError("project must be an object")
+        # Get-or-create by name is convergent: a replayed POST after an
+        # ambiguous 5xx resolves to the same project, so (unlike the create_*
+        # plan/task calls below) this stays retry-safe by default and does not
+        # opt out.
         return await self._request(
             "POST",
             self._projects_collection_url(),
@@ -299,6 +312,7 @@ class PlannerMixin:
             self._plans_collection_url(project_id),
             json=plan,
             headers=_mutation_headers(idempotency_key=idempotency_key),
+            idempotent=idempotency_key is not None,
             transform_payload=False,
         )
 
@@ -350,6 +364,35 @@ class PlannerMixin:
             transform_payload=False,
         )
 
+    async def _caller_active_role_ids(
+        self, plan_id: str, caller_id: str
+    ) -> list[str]:
+        """Role ids the caller actively holds on this plan.
+
+        Role-pooled tasks are addressed to a role (in ``assignedToRoleId``), not
+        the caller's oid, so scoping "tasks for the caller" to direct
+        assignments alone would hide them. Resolving the caller's Active role
+        assignments for the plan lets the task query expand to those roles.
+        """
+        assignments = await self.list_plan_role_assignments(
+            plan_id, subject_id=caller_id, status="Active"
+        )
+        entities = (
+            assignments.get("value")
+            if isinstance(assignments, dict)
+            else assignments
+        )
+        if not isinstance(entities, list):
+            return []
+        role_ids: list[str] = []
+        seen: set[str] = set()
+        for entity in entities:
+            role_id = _entity_scalar(entity, "roleId")
+            if role_id and role_id not in seen:
+                seen.add(role_id)
+                role_ids.append(role_id)
+        return role_ids
+
     async def list_project_plan_tasks_for_caller(
         self, project_id: str, plan_id: str, query: Optional[dict[str, Any]] = None
     ) -> Any:
@@ -358,13 +401,22 @@ class PlannerMixin:
             raise AgentConfigApiError(
                 "The access token has no 'oid' claim; cannot scope tasks to the caller."
             )
-        caller_filter = (
+        # Direct assignment to the caller, plus every role the caller actively
+        # holds on this plan. create_role_assigned_project_plan_task stores the
+        # role in assignedToRoleId, so role-pooled tasks would otherwise be
+        # invisible here despite the tool contract promising them.
+        clauses = [
             f"assignedToId eq '{_escape_odata_literal(caller_id, 'callerId')}'"
-        )
+        ]
+        for role_id in await self._caller_active_role_ids(plan_id, caller_id):
+            clauses.append(
+                f"assignedToRoleId eq '{_escape_odata_literal(role_id, 'roleId')}'"
+            )
+        caller_filter = " or ".join(clauses)
         merged = dict(query or {})
         existing = merged.get("filter")
         merged["filter"] = (
-            f"{caller_filter} and ({existing})" if existing else caller_filter
+            f"({caller_filter}) and ({existing})" if existing else caller_filter
         )
         return await self._request(
             "GET",
@@ -401,6 +453,7 @@ class PlannerMixin:
             self._tasks_collection_url(project_id, plan_id),
             json=task,
             headers=_mutation_headers(idempotency_key=idempotency_key),
+            idempotent=idempotency_key is not None,
             transform_payload=False,
         )
 
@@ -436,6 +489,7 @@ class PlannerMixin:
             self._tasks_collection_url(project_id, plan_id),
             json=body,
             headers=_mutation_headers(idempotency_key=idempotency_key),
+            idempotent=idempotency_key is not None,
             transform_payload=False,
         )
 

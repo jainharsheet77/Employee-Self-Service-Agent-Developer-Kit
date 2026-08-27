@@ -23,13 +23,14 @@ import pytest
 
 
 REPO_ROOT = Path(__file__).parents[3]
-AGENTCONFIG_DIR = (
-    REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "agentconfig"
-)
-sys.path.insert(0, str(AGENTCONFIG_DIR))
+MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
+PLANNER_DIR = MCP_ROOT / "planner"
+WEVE_DIR = MCP_ROOT / "weve"
+sys.path.insert(0, str(WEVE_DIR))
+sys.path.insert(0, str(PLANNER_DIR))
 
 import planner_client as planner_client_module  # noqa: E402
-import client as client_module  # noqa: E402
+import weve_client as weve_client_module  # noqa: E402
 import roles as roles_module  # noqa: E402
 
 
@@ -90,7 +91,7 @@ def test_client_decodes_tenant_and_caller_and_defaults_base(monkeypatch) -> None
     assert client.tenant_id == TENANT_ID
     assert client._caller_object_id == CALLER_OID
     assert client.projects_base_url == BASE
-    assert client.projects_base_url == planner_client_module.DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL
+    assert client.projects_base_url == planner_client_module._DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL
     # The bearer token must never leak through the client's repr.
     assert _token() not in repr(client)
 
@@ -231,23 +232,74 @@ def test_task_routes_lifecycle_and_headers(monkeypatch) -> None:
     assert deleting.headers["If-Match"] == "etag-t"
 
 
-def test_task_caller_scoping_uses_token_object_id(monkeypatch) -> None:
-    requests, handler = _recorder()
+def test_task_caller_scoping_expands_to_caller_direct_and_active_roles(
+    monkeypatch,
+) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if "agentRoleAssignments" in str(request.url):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {"roleId": "ServiceNowAdmin"},
+                        {"roleId": "WorkdayAdmin"},
+                    ]
+                },
+            )
+        return httpx.Response(200, json={"value": []})
+
     client = _make_client(monkeypatch, handler)
 
-    def calls():
-        return asyncio.gather(
-            client.list_project_plan_tasks_for_caller("proj1", "plan1"),
-            client.list_project_plan_tasks_for_caller(
-                "proj1", "plan1", {"filter": "state eq 'InProgress'"}
-            ),
-        )
+    _run(
+        client,
+        lambda: client.list_project_plan_tasks_for_caller("proj1", "plan1"),
+    )
 
-    _run(client, calls)
+    role_calls = [r for r in requests if "agentRoleAssignments" in str(r.url)]
+    task_calls = [r for r in requests if "agentPlanTasks" in str(r.url)]
+    # The caller's Active role assignments on this plan are resolved first...
+    assert len(role_calls) == 1
+    assert role_calls[0].url.params["$filter"] == (
+        f"targetPlanId eq 'plan1' and subjectObjectId eq '{CALLER_OID}' "
+        "and status eq 'Active'"
+    )
+    # ...then the task query expands to the caller oid plus every active role,
+    # so role-pooled tasks (assignedToRoleId) are not silently dropped.
+    assert len(task_calls) == 1
+    assert task_calls[0].url.params["$filter"] == (
+        f"assignedToId eq '{CALLER_OID}' "
+        "or assignedToRoleId eq 'ServiceNowAdmin' "
+        "or assignedToRoleId eq 'WorkdayAdmin'"
+    )
 
-    assert requests[0].url.params["$filter"] == f"assignedToId eq '{CALLER_OID}'"
-    assert requests[1].url.params["$filter"] == (
-        f"assignedToId eq '{CALLER_OID}' and (state eq 'InProgress')"
+
+def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> None:
+    requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if "agentRoleAssignments" in str(request.url):
+            return httpx.Response(
+                200, json={"value": [{"roleId": "ServiceNowAdmin"}]}
+            )
+        return httpx.Response(200, json={"value": []})
+
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.list_project_plan_tasks_for_caller(
+            "proj1", "plan1", {"filter": "state eq 'InProgress'"}
+        ),
+    )
+
+    task_call = next(r for r in requests if "agentPlanTasks" in str(r.url))
+    assert task_call.url.params["$filter"] == (
+        f"(assignedToId eq '{CALLER_OID}' or assignedToRoleId eq 'ServiceNowAdmin') "
+        "and (state eq 'InProgress')"
     )
 
 
@@ -264,7 +316,7 @@ def test_caller_scoping_requires_object_id_claim(monkeypatch) -> None:
     )
     assert client._caller_object_id is None
 
-    with pytest.raises(client_module.AgentConfigApiError, match="oid"):
+    with pytest.raises(weve_client_module.AgentConfigApiError, match="oid"):
         _run(client, lambda: client.list_project_plan_tasks_for_caller("p", "pl"))
 
 
@@ -523,7 +575,7 @@ def test_task_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
         ),
     )
 
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.update_project_plan_task(
@@ -555,7 +607,7 @@ def test_task_delete_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
         ),
     )
 
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.delete_project_plan_task("proj1", "plan1", "task2", 'W/"4"'),
@@ -581,7 +633,7 @@ def test_plan_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
         ),
     )
 
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.update_project_plan(
@@ -612,7 +664,7 @@ def test_stale_etag_retry_gives_up_when_version_did_not_move(monkeypatch) -> Non
 
     client = _make_client(monkeypatch, handler)
 
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.update_project_plan_task(
@@ -641,7 +693,7 @@ def test_task_mutation_on_non_active_plan_gets_actionable_409(monkeypatch) -> No
 
     client = _make_client(monkeypatch, handler)
 
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.set_project_plan_task_state(
@@ -676,7 +728,7 @@ def test_task_mutation_409_with_active_plan_is_reraised_unchanged(monkeypatch) -
 
     client = _make_client(monkeypatch, handler)
 
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.set_project_plan_task_state(
@@ -765,7 +817,7 @@ def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
         )
 
     client = _make_client(monkeypatch, handler)
-    with pytest.raises(client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.create_project_plan(
@@ -778,7 +830,7 @@ def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
 
 
 def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
-    monkeypatch.setattr(client_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(weve_client_module.asyncio, "sleep", _no_sleep)
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

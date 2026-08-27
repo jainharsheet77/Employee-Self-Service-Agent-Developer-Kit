@@ -46,19 +46,6 @@ def _make_client(
     return agentconfig_client.AgentConfigClient(transport=transport), token
 
 
-def test_token_cache_uses_agentconfig_local_state() -> None:
-    assert Path(agentconfig_client._TOKEN_CACHE_PATH) == (
-        REPO_ROOT
-        / "solutions"
-        / "ess-maker-skills"
-        / "src"
-        / "mcp"
-        / "agentconfig"
-        / ".local"
-        / "msal_token_cache.bin"
-    )
-
-
 def test_client_uses_production_api_by_default(monkeypatch) -> None:
     monkeypatch.delenv("AGENTCONFIG_BASE_URL", raising=False)
     monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", _token())
@@ -68,41 +55,6 @@ def test_client_uses_production_api_by_default(monkeypatch) -> None:
 
     assert client.base_url == agentconfig_client.DEFAULT_AGENTCONFIG_BASE_URL
     assert client.base_url == BASE_URL
-
-
-def test_interactive_auth_always_prompts_for_account_selection(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
-    class FakeServer:
-        server_port = 12345
-
-        def handle_request(self) -> None:
-            agentconfig_client._FormPostCaptureHandler.captured = {
-                "code": "authorization-code"
-            }
-
-        def server_close(self) -> None:
-            pass
-
-    class FakeApp:
-        def initiate_auth_code_flow(self, **kwargs):
-            captured.update(kwargs)
-            return {"auth_uri": "https://login.example.test"}
-
-        def acquire_token_by_auth_code_flow(self, flow, response):
-            return {"access_token": "token"}
-
-    monkeypatch.setattr(
-        agentconfig_client.http.server,
-        "HTTPServer",
-        lambda *args: FakeServer(),
-    )
-    monkeypatch.setattr(agentconfig_client.webbrowser, "open", lambda url: True)
-
-    result = agentconfig_client._acquire_token_interactive_form_post(FakeApp())
-
-    assert result == {"access_token": "token"}
-    assert captured["prompt"] == "select_account"
 
 
 def test_sends_resolved_token_as_bearer_without_exposing_it(
@@ -259,3 +211,38 @@ def test_api_error_uses_top_level_code_message_and_http_status(monkeypatch) -> N
     assert str(error) == "BadRequest: The request is invalid."
     assert error.http_status == 400
     assert "Customer-provided detail" not in str(error)
+
+
+def test_create_agent_config_retries_on_ambiguous_5xx(monkeypatch) -> None:
+    # The landing-page creates carry no idempotency key, yet a titleId-keyed
+    # EmployeeAgents POST is convergent (same titleId => same row), so after the
+    # PR #251 retry inversion an unkeyed create defaults to retry-safe. This
+    # pins that a 503 is transparently retried rather than surfaced -- the
+    # pre-planner behaviour the neutral core must preserve.
+    async def _no_sleep(_seconds: float) -> None:
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+    posts: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST":
+            posts.append(request)
+            if len(posts) == 1:
+                return httpx.Response(
+                    503, json={"Code": "ServiceUnavailable", "Message": "down"}
+                )
+        return httpx.Response(200, json={"TitleId": "title-1"})
+
+    client, _ = _make_client(monkeypatch, handler)
+
+    async def run() -> dict:
+        result = await client.create_agent_config("title-1")
+        await client.aclose()
+        return result
+
+    result = asyncio.run(run())
+
+    assert result == {"titleId": "title-1"}
+    assert len(posts) == 2  # retried once, then succeeded

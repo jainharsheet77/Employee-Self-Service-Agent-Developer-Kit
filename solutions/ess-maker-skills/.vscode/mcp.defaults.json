@@ -4,6 +4,11 @@
       "command": "{pythonExecutable}",
       "args": ["server.py"],
       "cwd": "${workspaceFolder}/src/mcp/agentconfig"
+    },
+    "ess-planner": {
+      "command": "{pythonExecutable}",
+      "args": ["server.py"],
+      "cwd": "${workspaceFolder}/src/mcp/planner"
     }
   }
 }

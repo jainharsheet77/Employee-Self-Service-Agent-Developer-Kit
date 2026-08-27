@@ -6,8 +6,9 @@
 Exposes the WeveNova AgentConfiguration beta surface — projects, plans, tasks,
 and plan role attestation — as MCP tools for the planner skill. Identity and
 tenant come from the access token (never tool arguments); the shared client
-core (auth, token decode, httpx session, retrying ``_request``) is inherited
-from the landing-page ``AgentConfigClient`` via ``PlannerClient``.
+core (auth, token decode, httpx session, retrying ``_request``) is the neutral
+``WeveClient``, which ``PlannerClient`` composes with the planner and role
+mixins.
 """
 
 from __future__ import annotations

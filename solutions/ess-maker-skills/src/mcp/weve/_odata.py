@@ -1,24 +1,23 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Shared OData helpers for the WeveNova AgentConfiguration beta surface.
+"""Shared OData / URL helpers for the WeveNova AgentConfiguration surfaces.
 
-These helpers are used by both the planner (projects/plans/tasks) and the role
-attestation endpoint modules. They intentionally have no dependency on the
-client class, so the domain mixins can import them without creating an import
-cycle with ``client``.
+Part of the neutral ``weve`` core: used by the planner (projects/plans/tasks),
+the role-attestation module, and the landing-page client. They intentionally
+depend on nothing else in the core, so any module can import them without an
+import cycle.
 """
 
 from __future__ import annotations
 
-import base64
-import binascii
-import json
 import urllib.parse
 from typing import Any, Optional
 
 
-DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL = "https://substrate.office.com/weveb2/api/beta"
+_DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL = (
+    "https://substrate.office.com/weveb2/api/beta"
+)
 _TENANTS_COLLECTION = "tenants"
 
 _QUERY_OPTION_MAP = {
@@ -31,28 +30,6 @@ _QUERY_OPTION_MAP = {
     "count": "$count",
     "skiptoken": "$skiptoken",
 }
-
-
-def _decode_object_id_from_jwt(token: str) -> Optional[str]:
-    """Best-effort decode of the caller's Entra object id (``oid`` claim).
-
-    Used to scope "tasks for the caller" queries to the signed-in principal
-    without taking the identity as a tool argument. Returns ``None`` when the
-    token is opaque or carries no ``oid`` claim.
-    """
-    parts = token.split(".")
-    if len(parts) != 3:
-        return None
-    payload_segment = parts[1]
-    padded = payload_segment + "=" * (-len(payload_segment) % 4)
-    try:
-        payload = json.loads(base64.urlsafe_b64decode(padded))
-    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError):
-        return None
-    object_id = payload.get("oid")
-    if isinstance(object_id, str) and object_id:
-        return object_id
-    return None
 
 
 def _validate_https_base_url(url: str, env_name: str) -> str:
@@ -73,26 +50,29 @@ def _validate_https_base_url(url: str, env_name: str) -> str:
     return url.rstrip("/")
 
 
-def _require_odata_id(value: str, name: str) -> str:
-    """Validate a non-empty, control-char-free id and encode it as an OData key."""
+def _validate_odata_string(value: str, name: str) -> str:
+    """Validate a non-empty, control-char-free string bound for OData use.
+
+    Shared by ``_escape_odata_literal`` and ``_require_odata_id``; the only
+    difference between those two is whether the escaped result is URL-quoted.
+    """
     if not isinstance(value, str) or not value or value != value.strip():
         raise ValueError(
             f"{name} must be a non-empty string without surrounding whitespace"
         )
     if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
         raise ValueError(f"{name} must not contain control characters")
-    return urllib.parse.quote(value.replace("'", "''"), safe="")
+    return value
 
 
 def _escape_odata_literal(value: str, name: str) -> str:
     """Validate and single-quote-escape a value for an OData ``$filter`` literal."""
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise ValueError(
-            f"{name} must be a non-empty string without surrounding whitespace"
-        )
-    if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
-        raise ValueError(f"{name} must not contain control characters")
-    return value.replace("'", "''")
+    return _validate_odata_string(value, name).replace("'", "''")
+
+
+def _require_odata_id(value: str, name: str) -> str:
+    """Validate a non-empty, control-char-free id and encode it as an OData key."""
+    return urllib.parse.quote(_escape_odata_literal(value, name), safe="")
 
 
 def _mutation_headers(

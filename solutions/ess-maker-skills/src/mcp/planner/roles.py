@@ -3,7 +3,7 @@
 
 """WeveNova plan role-attestation endpoints (AgentConfiguration beta).
 
-``RolesMixin`` is composed onto the base ``AgentConfigClient`` (see
+``RolesMixin`` is composed onto the neutral ``WeveClient`` core (see
 ``planner_client.py``) and reuses its bearer auth, tenant decode, httpx
 session, and retrying ``_request``. Role assignments are tenant-sharded on the
 token's ``tid`` claim, so the tenant is never a tool argument.
@@ -11,9 +11,18 @@ token's ``tid`` claim, so the tenant is never a tool argument.
 
 from __future__ import annotations
 
+import os
+import sys
 from typing import Any, Optional
 
-from _odata import (
+# Import the neutral OData helpers from the sibling ``weve`` folder (flat
+# sys.path; no package __init__.py under src/mcp, each server launches with its
+# own cwd).
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weve")
+)
+
+from _odata import (  # noqa: E402
     _TENANTS_COLLECTION,
     _build_query_params,
     _escape_odata_literal,
@@ -34,7 +43,7 @@ _ATTESTATION_PROVIDER = "External"
 class RolesMixin:
     """Plan role-attestation methods (tenant-sharded on the token's ``tid``)."""
 
-    # Provided by the assembled client (AgentConfigClient / PlannerClient).
+    # Provided by the assembled client (PlannerClient).
     projects_base_url: str
     tenant_id: str
 

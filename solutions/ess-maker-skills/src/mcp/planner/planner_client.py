@@ -1,0 +1,64 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Planner client: the neutral WeveNova core plus the planner and
+role-attestation endpoint mixins.
+
+``PlannerClient`` inherits the shared ``WeveClient`` core — MSAL/bearer token
+acquisition, the ``tid`` tenant decode, the shared httpx session, and the
+retrying ``_request`` — and layers the beta project/plan/task and
+role-attestation surfaces on top through mixins. It adds only the two pieces
+those surfaces need beyond the core: the beta projects base URL and the
+caller's ``oid`` (decoded from the same token). It logs under its own
+``ess-planner`` name and carries none of the landing-page EmployeeAgents routes.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+import httpx
+
+# Import the neutral core from the sibling ``weve`` folder. Each MCP server
+# launches with cwd set to its own directory on a flat sys.path (there is no
+# package __init__.py under src/mcp), so make that shared folder importable.
+sys.path.insert(
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weve")
+)
+
+from _odata import (  # noqa: E402
+    _DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL,
+    _validate_https_base_url,
+)
+from weve_client import WeveClient, _decode_object_id_from_jwt  # noqa: E402
+
+from planner import PlannerMixin  # noqa: E402
+from roles import RolesMixin  # noqa: E402
+
+
+class PlannerClient(PlannerMixin, RolesMixin, WeveClient):
+    """Async client for the AgentConfiguration project / plan / task and role
+    attestation routes, composed onto the neutral WeveNova client core."""
+
+    def __init__(self, *, transport: httpx.AsyncBaseTransport | None = None):
+        projects_base_url = _validate_https_base_url(
+            os.environ.get(
+                "AGENTCONFIG_PROJECTS_BASE_URL",
+                _DEFAULT_AGENTCONFIG_PROJECTS_BASE_URL,
+            ),
+            "AGENTCONFIG_PROJECTS_BASE_URL",
+        )
+        super().__init__(
+            base_url=projects_base_url,
+            logger_name="ess-planner",
+            transport=transport,
+        )
+        self.projects_base_url = projects_base_url
+        self._caller_object_id = _decode_object_id_from_jwt(self._token)
+
+    def __repr__(self) -> str:
+        return (
+            f"<PlannerClient projects_base_url={self.projects_base_url!r} "
+            f"tenant_id={self.tenant_id!r}>"
+        )
