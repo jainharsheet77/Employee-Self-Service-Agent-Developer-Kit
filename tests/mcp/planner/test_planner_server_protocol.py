@@ -27,7 +27,13 @@ from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 REPO_ROOT = Path(__file__).parents[3]
 PLANNER_DIR = (
-    REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "planner"
+    REPO_ROOT
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "mcp"
+    / "agentconfig"
+    / "agentconfig_planner"
 )
 sys.path.insert(0, str(PLANNER_DIR))
 

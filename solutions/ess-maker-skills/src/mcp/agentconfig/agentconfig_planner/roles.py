@@ -15,9 +15,11 @@ import os
 import sys
 from typing import Any, Optional
 
-# Import the neutral OData helpers from the sibling ``agentconfig_core`` folder (flat
-# sys.path; no package __init__.py under src/mcp, each server launches with its
-# own cwd).
+# The AgentConfiguration MCP family lives under ``src/mcp/agentconfig`` as three
+# sibling folders: the shared ``agentconfig_core`` client core plus the two MCP
+# servers ``agentconfig_planner`` and ``agentconfig_landing_page``. There is no
+# package __init__.py, and each server launches with cwd set to its own folder on
+# a flat sys.path, so make the sibling ``agentconfig_core`` folder importable.
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agentconfig_core")
 )

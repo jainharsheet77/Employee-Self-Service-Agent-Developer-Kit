@@ -16,7 +16,13 @@ import httpx
 
 REPO_ROOT = Path(__file__).parents[3]
 AGENTCONFIG_DIR = (
-    REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "agentconfig"
+    REPO_ROOT
+    / "solutions"
+    / "ess-maker-skills"
+    / "src"
+    / "mcp"
+    / "agentconfig"
+    / "agentconfig_landing_page"
 )
 sys.path.insert(0, str(AGENTCONFIG_DIR))
 
