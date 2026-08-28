@@ -4,8 +4,8 @@
 """Landing-page EmployeeAgents client (AgentConfiguration v1.1 surface).
 
 The shared client core — bearer-token acquisition, the JWT claim decode, the
-httpx session, and the retrying ``_request`` — lives in the neutral ``weve``
-core (``weve_client.WeveClient``). This module keeps only what is specific to
+httpx session, and the retrying ``_request`` — lives in the neutral ``agentconfig_core``
+core (``base_client.AgentConfigBaseClient``). This module keeps only what is specific to
 the landing-page surface: the v1.1 base URL, the PascalCase/camelCase key
 transform, the titleId helpers, and the tenant-scoped EmployeeAgents routes.
 """
@@ -18,11 +18,11 @@ from typing import Any
 
 import httpx
 
-# The neutral core lives in the sibling ``weve`` folder. Each MCP server
+# The neutral core lives in the sibling ``agentconfig_core`` folder. Each MCP server
 # launches with cwd set to its own directory on a flat sys.path (there is no
 # package __init__.py under src/mcp), so make that shared folder importable.
 sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weve")
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agentconfig_core")
 )
 
 from _odata import (  # noqa: E402
@@ -30,7 +30,7 @@ from _odata import (  # noqa: E402
     _validate_https_base_url,
     _validate_odata_string,
 )
-from weve_client import AgentConfigApiError, WeveClient  # noqa: E402
+from base_client import AgentConfigApiError, AgentConfigBaseClient  # noqa: E402
 
 
 DEFAULT_AGENTCONFIG_BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
@@ -73,11 +73,11 @@ def _to_tool_payload(value: Any) -> Any:
     return _convert_key_case(value, upper=False)
 
 
-class AgentConfigClient(WeveClient):
+class AgentConfigClient(AgentConfigBaseClient):
     """Async client for production EmployeeAgents list/search/create/get/PATCH.
 
     Inherits auth, token decode, the httpx session, and the retrying
-    ``_request`` from ``WeveClient``; adds only the landing-page v1.1 base URL,
+    ``_request`` from ``AgentConfigBaseClient``; adds only the landing-page v1.1 base URL,
     the PascalCase response transform, and the EmployeeAgents routes.
     """
 

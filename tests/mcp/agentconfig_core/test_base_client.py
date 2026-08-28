@@ -1,12 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests for the neutral WeveNova client core (auth + token cache).
+"""Tests for the neutral AgentConfiguration client core (auth + token cache).
 
 The token-flow behaviour — the shared MSAL cache location and the interactive
-form-post sign-in — lives on the neutral ``WeveClient`` core under ``weve/`` and
-is shared by every WeveNova MCP (landing-page config and planner), so it is
-pinned here against ``weve_client`` directly rather than any one server's client.
+form-post sign-in — lives on the neutral ``AgentConfigBaseClient`` core under ``agentconfig_core/`` and
+is shared by every AgentConfiguration MCP (landing-page config and planner), so it is
+pinned here against ``base_client`` directly rather than any one server's client.
 """
 
 from __future__ import annotations
@@ -16,20 +16,20 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).parents[3]
-WEVE_DIR = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "weve"
-sys.path.insert(0, str(WEVE_DIR))
+CORE_DIR = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp" / "agentconfig_core"
+sys.path.insert(0, str(CORE_DIR))
 
-import weve_client  # noqa: E402
+import base_client  # noqa: E402
 
 
-def test_token_cache_uses_shared_weve_local_state() -> None:
-    assert Path(weve_client._TOKEN_CACHE_PATH) == (
+def test_token_cache_uses_shared_local_state() -> None:
+    assert Path(base_client._TOKEN_CACHE_PATH) == (
         REPO_ROOT
         / "solutions"
         / "ess-maker-skills"
         / "src"
         / "mcp"
-        / "weve"
+        / "agentconfig_core"
         / ".local"
         / "msal_token_cache.bin"
     )
@@ -42,7 +42,7 @@ def test_interactive_auth_always_prompts_for_account_selection(monkeypatch) -> N
         server_port = 12345
 
         def handle_request(self) -> None:
-            weve_client._FormPostCaptureHandler.captured = {
+            base_client._FormPostCaptureHandler.captured = {
                 "code": "authorization-code"
             }
 
@@ -58,13 +58,13 @@ def test_interactive_auth_always_prompts_for_account_selection(monkeypatch) -> N
             return {"access_token": "token"}
 
     monkeypatch.setattr(
-        weve_client.http.server,
+        base_client.http.server,
         "HTTPServer",
         lambda *args: FakeServer(),
     )
-    monkeypatch.setattr(weve_client.webbrowser, "open", lambda url: True)
+    monkeypatch.setattr(base_client.webbrowser, "open", lambda url: True)
 
-    result = weve_client._acquire_token_interactive_form_post(FakeApp())
+    result = base_client._acquire_token_interactive_form_post(FakeApp())
 
     assert result == {"access_token": "token"}
     assert captured["prompt"] == "select_account"

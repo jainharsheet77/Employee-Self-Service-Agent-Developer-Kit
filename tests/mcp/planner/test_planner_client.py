@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Request-construction contract for the WeveNova planner/role client.
+"""Request-construction contract for the AgentConfiguration planner/role client.
 
 Every PlannerClient method is exercised through an httpx.MockTransport so the
 exact route, HTTP method, camelCase body, OData query, and mutation headers each
@@ -25,12 +25,12 @@ import pytest
 REPO_ROOT = Path(__file__).parents[3]
 MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
 PLANNER_DIR = MCP_ROOT / "planner"
-WEVE_DIR = MCP_ROOT / "weve"
-sys.path.insert(0, str(WEVE_DIR))
+CORE_DIR = MCP_ROOT / "agentconfig_core"
+sys.path.insert(0, str(CORE_DIR))
 sys.path.insert(0, str(PLANNER_DIR))
 
 import planner_client as planner_client_module  # noqa: E402
-import weve_client as weve_client_module  # noqa: E402
+import base_client as base_client_module  # noqa: E402
 import roles as roles_module  # noqa: E402
 
 
@@ -243,9 +243,12 @@ def test_task_caller_scoping_expands_to_caller_direct_and_active_roles(
             return httpx.Response(
                 200,
                 json={
+                    # The assignment response projects the role name under
+                    # ``role``; the $filter grammar keys it as ``roleId`` but
+                    # the response body does not carry ``roleId``.
                     "value": [
-                        {"roleId": "ServiceNowAdmin"},
-                        {"roleId": "WorkdayAdmin"},
+                        {"role": "ServiceNowAdmin"},
+                        {"role": "WorkdayAdmin"},
                     ]
                 },
             )
@@ -283,7 +286,7 @@ def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> No
         requests.append(request)
         if "agentRoleAssignments" in str(request.url):
             return httpx.Response(
-                200, json={"value": [{"roleId": "ServiceNowAdmin"}]}
+                200, json={"value": [{"role": "ServiceNowAdmin"}]}
             )
         return httpx.Response(200, json={"value": []})
 
@@ -316,7 +319,7 @@ def test_caller_scoping_requires_object_id_claim(monkeypatch) -> None:
     )
     assert client._caller_object_id is None
 
-    with pytest.raises(weve_client_module.AgentConfigApiError, match="oid"):
+    with pytest.raises(base_client_module.AgentConfigApiError, match="oid"):
         _run(client, lambda: client.list_project_plan_tasks_for_caller("p", "pl"))
 
 
@@ -537,7 +540,7 @@ def test_attestable_roles_constant_is_the_provider_owned_set() -> None:
 # ---------------------------------------------------------------------------
 # ETag / plan-state conflict recovery
 #
-# WeveNova returns 412 PreconditionFailed for a stale/mismatched If-Match and
+# AgentConfiguration returns 412 PreconditionFailed for a stale/mismatched If-Match and
 # 409 Conflict when a task mutation targets a non-Active plan. On the former the
 # client re-reads only to raise an actionable "the ETag advanced, re-read and
 # reapply" error -- it never replays the mutation, since replaying would defeat
@@ -575,7 +578,7 @@ def test_task_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
         ),
     )
 
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.update_project_plan_task(
@@ -607,7 +610,7 @@ def test_task_delete_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
         ),
     )
 
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.delete_project_plan_task("proj1", "plan1", "task2", 'W/"4"'),
@@ -633,7 +636,7 @@ def test_plan_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
         ),
     )
 
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.update_project_plan(
@@ -664,7 +667,7 @@ def test_stale_etag_retry_gives_up_when_version_did_not_move(monkeypatch) -> Non
 
     client = _make_client(monkeypatch, handler)
 
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.update_project_plan_task(
@@ -693,7 +696,7 @@ def test_task_mutation_on_non_active_plan_gets_actionable_409(monkeypatch) -> No
 
     client = _make_client(monkeypatch, handler)
 
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.set_project_plan_task_state(
@@ -728,7 +731,7 @@ def test_task_mutation_409_with_active_plan_is_reraised_unchanged(monkeypatch) -
 
     client = _make_client(monkeypatch, handler)
 
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.set_project_plan_task_state(
@@ -817,7 +820,7 @@ def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
         )
 
     client = _make_client(monkeypatch, handler)
-    with pytest.raises(weve_client_module.AgentConfigApiError) as excinfo:
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
         _run(
             client,
             lambda: client.create_project_plan(
@@ -830,7 +833,7 @@ def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
 
 
 def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
-    monkeypatch.setattr(weve_client_module.asyncio, "sleep", _no_sleep)
+    monkeypatch.setattr(base_client_module.asyncio, "sleep", _no_sleep)
     calls: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:

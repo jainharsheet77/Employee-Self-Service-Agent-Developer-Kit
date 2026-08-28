@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""WeveNova plan role-attestation endpoints (AgentConfiguration beta).
+"""AgentConfiguration plan role-attestation endpoints (AgentConfiguration beta).
 
-``RolesMixin`` is composed onto the neutral ``WeveClient`` core (see
+``RolesMixin`` is composed onto the neutral ``AgentConfigBaseClient`` core (see
 ``planner_client.py``) and reuses its bearer auth, tenant decode, httpx
 session, and retrying ``_request``. Role assignments are tenant-sharded on the
 token's ``tid`` claim, so the tenant is never a tool argument.
@@ -15,11 +15,11 @@ import os
 import sys
 from typing import Any, Optional
 
-# Import the neutral OData helpers from the sibling ``weve`` folder (flat
+# Import the neutral OData helpers from the sibling ``agentconfig_core`` folder (flat
 # sys.path; no package __init__.py under src/mcp, each server launches with its
 # own cwd).
 sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weve")
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agentconfig_core")
 )
 
 from _odata import (  # noqa: E402
@@ -128,6 +128,13 @@ class RolesMixin:
             "target": {"type": "Plan", "id": plan_id},
             "provider": provider,
         }
+        # Attest is a deterministic-row upsert on the backend: a given
+        # (subject, role, target) resolves to one stable assignment row (an
+        # opaque composite grant id), so replaying this POST converges on that
+        # same row instead of creating duplicates. Verified against the
+        # AgentConfiguration service. Passing an Idempotency-Key
+        # (idempotency_key) additionally replays the cached result verbatim;
+        # both make a retried attest safe with no client-side de-duplication.
         return await self._request(
             "POST",
             f"{self._role_assignments_collection_url()}/attest",

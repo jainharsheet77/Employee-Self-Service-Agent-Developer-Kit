@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Protocol-level tests for the WeveNova planner MCP server.
+"""Protocol-level tests for the AgentConfiguration planner MCP server.
 
 Imports the FastMCP server and inspects the *resolved* tool surface exactly as
 a client would see it over MCP: the tool list, each tool's description, its

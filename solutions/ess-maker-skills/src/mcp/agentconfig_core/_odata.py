@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Shared OData / URL helpers for the WeveNova AgentConfiguration surfaces.
+"""Shared OData / URL helpers for the AgentConfiguration surfaces.
 
-Part of the neutral ``weve`` core: used by the planner (projects/plans/tasks),
+Part of the neutral ``agentconfig_core`` package: used by the planner (projects/plans/tasks),
 the role-attestation module, and the landing-page client. They intentionally
 depend on nothing else in the core, so any module can import them without an
 import cycle.
@@ -112,7 +112,7 @@ def _normalize_etag(value: Optional[str]) -> Optional[str]:
 def _entity_scalar(entity: Any, *names: str) -> Optional[str]:
     """Case-insensitively read the first present non-empty string field.
 
-    WeveNova renders entity bodies in PascalCase (``ETag``, ``Status``) while
+    AgentConfiguration renders entity bodies in PascalCase (``ETag``, ``Status``) while
     OData also permits the ``@odata.etag`` annotation; callers pass every
     accepted spelling and get back the first non-empty match.
     """

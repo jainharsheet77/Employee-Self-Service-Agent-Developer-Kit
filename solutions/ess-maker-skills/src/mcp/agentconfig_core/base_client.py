@@ -1,12 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Neutral WeveNova client core shared by the landing-page and planner MCPs.
+"""Neutral AgentConfiguration client core shared by the landing-page and planner MCPs.
 
-This module owns everything both WeveNova MCP surfaces need and neither should
+This module owns everything both AgentConfiguration MCP surfaces need and neither should
 re-implement: bearer-token acquisition, the JWT claim decode, a single shared
 httpx session, and the retrying ``_request``. ``AgentConfigClient`` (landing
-page) and ``PlannerClient`` (planner) both inherit ``WeveClient``, each with its
+page) and ``PlannerClient`` (planner) both inherit ``AgentConfigBaseClient``, each with its
 own base URL and logger name.
 
 Token acquisition, in priority order:
@@ -45,10 +45,10 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 _CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 _SCOPE = ["https://substrate.office.com/weve/.default"]
 _AUTHORITY = "https://login.microsoftonline.com/organizations"
-# Derived from this shared-core module's own location so every WeveNova MCP
+# Derived from this shared-core module's own location so every AgentConfiguration MCP
 # (landing-page, planner) shares ONE MSAL cache and ONE interactive sign-in.
-_WEVE_DIR = os.path.dirname(os.path.abspath(__file__))
-_LOCAL_STATE_DIR = os.path.join(_WEVE_DIR, ".local")
+_CORE_DIR = os.path.dirname(os.path.abspath(__file__))
+_LOCAL_STATE_DIR = os.path.join(_CORE_DIR, ".local")
 _TOKEN_CACHE_PATH = os.path.join(_LOCAL_STATE_DIR, "msal_token_cache.bin")
 
 
@@ -141,7 +141,7 @@ def _save_msal_cache(cache: Any) -> None:
 
 
 def acquire_token_msal_interactive() -> str:
-    """Acquire a delegated Weve token through cached or interactive MSAL auth."""
+    """Acquire a delegated AgentConfiguration token through cached or interactive MSAL auth."""
     import msal
 
     cache = _load_msal_cache()
@@ -248,8 +248,8 @@ def _decode_object_id_from_jwt(token: str) -> Optional[str]:
     return None
 
 
-class WeveClient:
-    """Neutral WeveNova client core shared by the landing-page and planner MCPs.
+class AgentConfigBaseClient:
+    """Neutral AgentConfiguration client core shared by the landing-page and planner MCPs.
 
     Owns everything both surfaces need and neither should re-implement: MSAL/
     bearer token acquisition, the JWT claim decode, a single shared httpx

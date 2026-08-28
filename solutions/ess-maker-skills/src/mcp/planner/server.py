@@ -3,11 +3,11 @@
 
 """ESS planner MCP server.
 
-Exposes the WeveNova AgentConfiguration beta surface — projects, plans, tasks,
+Exposes the AgentConfiguration beta surface — projects, plans, tasks,
 and plan role attestation — as MCP tools for the planner skill. Identity and
 tenant come from the access token (never tool arguments); the shared client
 core (auth, token decode, httpx session, retrying ``_request``) is the neutral
-``WeveClient``, which ``PlannerClient`` composes with the planner and role
+``AgentConfigBaseClient``, which ``PlannerClient`` composes with the planner and role
 mixins.
 """
 
@@ -52,7 +52,7 @@ _CREATE_ANNOTATIONS = ToolAnnotations(
 mcp = FastMCP(
     "ess-planner",
     instructions=(
-        "Drive WeveNova AgentConfiguration projects, plans, tasks, and plan "
+        "Drive AgentConfiguration projects, plans, tasks, and plan "
         "role attestation. Identity and tenant come from the access token and "
         "are never tool arguments. For any PATCH/DELETE, read the exact entity "
         "first and pass its current ETag as ``etag`` (sent as If-Match). The "
@@ -81,7 +81,7 @@ def _format(data: Any) -> str:
 
 
 # ----------------------------------------------------------------------
-# AgentConfiguration project / plan / task tools (WeveNova beta surface).
+# AgentConfiguration project / plan / task tools (AgentConfiguration beta surface).
 # Identity and tenant come from the access token; they are never tool args.
 # For any PATCH/DELETE, read the exact entity first and pass its current
 # ETag as ``etag`` (sent as If-Match). On a stale-ETag (412) conflict the
@@ -371,7 +371,7 @@ async def delete_project_plan_task(
 
 
 # ----------------------------------------------------------------------
-# WeveNova role attestation tools. The tenant is taken from the access
+# AgentConfiguration role attestation tools. The tenant is taken from the access
 # token; only the provider-owned attestable roles are valid and the
 # attestation provider is always External.
 # ----------------------------------------------------------------------

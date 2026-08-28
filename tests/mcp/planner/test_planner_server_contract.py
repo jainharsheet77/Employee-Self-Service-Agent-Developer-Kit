@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Static contract checks for the WeveNova planner MCP server.
+"""Static contract checks for the AgentConfiguration planner MCP server.
 
 Parsed from source (no import) so the exposed tool surface - names, argument
 lists, read/mutate/delete classification, and the presence of a description -

@@ -1,9 +1,9 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""WeveNova project / plan / task endpoints (AgentConfiguration beta).
+"""AgentConfiguration project / plan / task endpoints (AgentConfiguration beta).
 
-``PlannerMixin`` is composed onto the neutral ``WeveClient`` core (see
+``PlannerMixin`` is composed onto the neutral ``AgentConfigBaseClient`` core (see
 ``planner_client.py``) and reuses its bearer auth, tenant decode, httpx
 session, and retrying ``_request``. These routes live on the beta base
 (``.../api/beta/me/agentConfigurationProjects``) and are addressed with
@@ -18,10 +18,10 @@ import os
 import sys
 from typing import Any, Awaitable, Callable, Optional
 
-# Import the neutral core from the sibling ``weve`` folder (flat sys.path; no
+# Import the neutral core from the sibling ``agentconfig_core`` folder (flat sys.path; no
 # package __init__.py under src/mcp, each server launches with its own cwd).
 sys.path.insert(
-    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "weve")
+    0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agentconfig_core")
 )
 
 from _odata import (  # noqa: E402
@@ -32,7 +32,7 @@ from _odata import (  # noqa: E402
     _normalize_etag,
     _require_odata_id,
 )
-from weve_client import AgentConfigApiError  # noqa: E402
+from base_client import AgentConfigApiError  # noqa: E402
 
 from roles import ATTESTABLE_ROLES  # noqa: E402
 
@@ -160,7 +160,7 @@ class PlannerMixin:
         surface produces so a planner agent need not hand-roll the retry dance.
 
         * **412 Precondition Failed** (stale/mismatched ETag): re-read the
-          entity via ``refetch`` to surface an actionable error. WeveNova bumps
+          entity via ``refetch`` to surface an actionable error. AgentConfiguration bumps
           a task's version as a side effect of ledger reconciliation (for
           example, completing a producer task reconciles an artifact a consumer
           task references), so an ETag a caller just read can go stale through
@@ -192,7 +192,14 @@ class PlannerMixin:
             return await _perform(etag)
         except AgentConfigApiError as error:
             if error.http_status == 412:
-                entity = await refetch()
+                try:
+                    entity = await refetch()
+                except AgentConfigApiError:
+                    # The re-read that would let us explain the precondition
+                    # failure itself failed; surface the original 412 so the
+                    # caller still sees the actionable stale-ETag signal rather
+                    # than a secondary error from the recovery read.
+                    raise error
                 fresh = _entity_scalar(entity, "ETag", "@odata.etag")
                 if fresh and _normalize_etag(fresh) != _normalize_etag(etag):
                     # The entity was modified after the caller read it (its ETag
@@ -211,7 +218,13 @@ class PlannerMixin:
                     ) from error
                 raise
             if error.http_status == 409 and plan_refetch is not None:
-                plan = await plan_refetch()
+                try:
+                    plan = await plan_refetch()
+                except AgentConfigApiError:
+                    # As above: keep the original 409 conflict if the recovery
+                    # plan re-read fails, instead of masking it with a secondary
+                    # error.
+                    raise error
                 status = _entity_scalar(plan, "Status")
                 if status is not None and status.lower() != "active":
                     raise AgentConfigApiError(
@@ -387,7 +400,14 @@ class PlannerMixin:
         role_ids: list[str] = []
         seen: set[str] = set()
         for entity in entities:
-            role_id = _entity_scalar(entity, "roleId")
+            # Field asymmetry: the $filter grammar keys role on ``roleId`` (see
+            # list_plan_role_assignments), but the assignment response projects
+            # the role name under ``role`` (``roleId`` appears only on older
+            # shapes). Read ``role`` first, falling back to ``roleId``, so the
+            # value matches a task's ``assignedToRoleId`` and role-pooled tasks
+            # are not silently dropped. Verified against the AgentConfiguration
+            # service response shape.
+            role_id = _entity_scalar(entity, "role", "roleId")
             if role_id and role_id not in seen:
                 seen.add(role_id)
                 role_ids.append(role_id)
