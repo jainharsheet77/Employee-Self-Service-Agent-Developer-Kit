@@ -17,7 +17,7 @@ SERVER_PATH = (
     / "ess-maker-skills"
     / "src"
     / "mcp"
-    / "agentconfig"
+    / "agentconfig_landing_page"
     / "server.py"
 )
 MCP_DEFAULTS_PATH = (

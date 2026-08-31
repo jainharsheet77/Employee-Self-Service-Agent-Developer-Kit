@@ -95,7 +95,7 @@ jobs:
       run: >-
         pip install
         -r requirements-dev.txt
-        -r solutions/ess-maker-skills/src/mcp/agentconfig/requirements.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_landing_page/requirements.txt
 
     - name: Run AgentConfiguration tests
       run: >-
