@@ -136,7 +136,7 @@ result has exactly ONE slash between the domain and `api` — for example
 Run this command in the terminal without showing it to the user:
 
 ```powershell
-python -m pip install -r src/mcp/agentconfig/agentconfig_landing_page/requirements.txt
+python -m pip install -r src/mcp/agentconfig_landing_page/requirements.txt
 ```
 
 If installation fails, show the error and stop.

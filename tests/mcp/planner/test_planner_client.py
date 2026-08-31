@@ -24,9 +24,8 @@ import pytest
 
 REPO_ROOT = Path(__file__).parents[3]
 MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
-AGENTCONFIG_ROOT = MCP_ROOT / "agentconfig"
-PLANNER_DIR = AGENTCONFIG_ROOT / "agentconfig_planner"
-CORE_DIR = AGENTCONFIG_ROOT / "agentconfig_core"
+PLANNER_DIR = MCP_ROOT / "agentconfig_planner"
+CORE_DIR = MCP_ROOT / "agentconfig_core"
 sys.path.insert(0, str(CORE_DIR))
 sys.path.insert(0, str(PLANNER_DIR))
 

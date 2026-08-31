@@ -4,7 +4,7 @@
 """Tests for the neutral AgentConfiguration client core (auth + token cache).
 
 The token-flow behaviour — the shared MSAL cache location and the interactive
-form-post sign-in — lives on the neutral ``AgentConfigBaseClient`` core under ``agentconfig/agentconfig_core/`` and
+form-post sign-in — lives on the neutral ``AgentConfigBaseClient`` core under ``agentconfig_core/`` and
 is shared by every AgentConfiguration MCP (landing-page config and planner), so it is
 pinned here against ``base_client`` directly rather than any one server's client.
 """
@@ -22,7 +22,6 @@ CORE_DIR = (
     / "ess-maker-skills"
     / "src"
     / "mcp"
-    / "agentconfig"
     / "agentconfig_core"
 )
 sys.path.insert(0, str(CORE_DIR))
@@ -37,7 +36,6 @@ def test_token_cache_uses_shared_local_state() -> None:
         / "ess-maker-skills"
         / "src"
         / "mcp"
-        / "agentconfig"
         / "agentconfig_core"
         / ".local"
         / "msal_token_cache.bin"

@@ -32,7 +32,6 @@ PLANNER_DIR = (
     / "ess-maker-skills"
     / "src"
     / "mcp"
-    / "agentconfig"
     / "agentconfig_planner"
 )
 sys.path.insert(0, str(PLANNER_DIR))

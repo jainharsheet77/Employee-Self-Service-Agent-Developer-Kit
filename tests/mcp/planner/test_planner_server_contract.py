@@ -23,7 +23,6 @@ SERVER_PATH = (
     / "ess-maker-skills"
     / "src"
     / "mcp"
-    / "agentconfig"
     / "agentconfig_planner"
     / "server.py"
 )

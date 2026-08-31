@@ -23,7 +23,6 @@ AGENTCONFIG_DIR = (
     / "ess-maker-skills"
     / "src"
     / "mcp"
-    / "agentconfig"
     / "agentconfig_landing_page"
 )
 sys.path.insert(0, str(AGENTCONFIG_DIR))
