@@ -84,11 +84,13 @@ have checked for an existing plan.**
    the objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
-     produced so far. The task table's **Blocked by** column is the render-time
-     dependency marker: it names the upstream task(s) that still owe an artifact
-     this task consumes (`—` == ready). Call out blocked tasks when you present
-     the plan so nobody starts a task whose inputs don't exist yet. Present it in
-     plain language.
+     produced so far. The task table's **State** column carries the render-time
+     dependency signal, one icon per state: a task still waiting on an upstream
+     artifact it consumes reads as **🔒 Not started** (a ready task is
+     **⬜ Not started**, a running one **🔄 In progress**, a finished one
+     **✅ Complete**). Call out the locked tasks when you present the plan so
+     nobody starts a task whose inputs don't exist yet. Present it in plain
+     language.
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
      front of you (Flow 2): the shared planner already stores the role→person
      mapping, so ask it for the caller's tasks with
@@ -189,7 +191,12 @@ importing it (`src/skills/planner/import.md`): make sense of it, persist it, and
 ask only for the gaps — then work the remaining phases from there. After every
 phase that changes the plan the CLI regenerates the human view
 (`workspace/plan/ESS-scenario-plan.md`); at natural checkpoints show the sponsor
-`python scripts/planner/cli.py summary`. During the interview (Phase 2), once
+`python scripts/planner/cli.py summary`. **When you present a built or updated
+plan, surface that file as a downloadable artifact in chat** — announce it
+("✓ Plan created — ESS-scenario-plan.md") with a link/attachment to
+`workspace/plan/ESS-scenario-plan.md` *before* you show the body, so the maker can
+save or hand it off, not just read it inline (Bug 7952898). The `summary` command
+prints an `artifact:` path on stderr as the reminder. During the interview (Phase 2), once
 scenarios + goals are captured, render the **eager eval preview** (Phase 5,
 `src/skills/planner/evaluate.md`) — render-only, it generates nothing; **Phase 6**
 (capture) runs later as each Task executes. Once the plan exists, hand the editor

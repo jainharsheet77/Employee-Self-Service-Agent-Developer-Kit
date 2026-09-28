@@ -87,19 +87,15 @@ already mirror.
 After you've built the plan locally through the phases (research → interview →
 model → assign), publish it in **one** create call rather than task-by-task:
 
-1. **Ask the sponsor which configuring agent this plan targets — don't guess.**
-   The create body's `configuringAgentName` is a required, **sponsor-owned**
-   choice; it is **not** inferable from the plan, so **ask and confirm the exact
-   enum before setting it** — never silently default to one (e.g. don't assume
-   `EmployeeSelfServiceHRCEA`). Present the four options and let the sponsor pick:
-   - `EmployeeSelfServiceHRCEA` — HR, custom engine agent
-   - `EmployeeSelfServiceHRDA` — HR, declarative agent
-   - `EmployeeSelfServiceITCEA` — IT, custom engine agent
-   - `EmployeeSelfServiceITDA` — IT, declarative agent
-   HR-vs-IT may be clear from the interview, but **custom-engine vs declarative is
-   an agent-build fact the interview rarely captures**, so confirm *both* axes in
-   plain language ("Is this for HR or IT?" and "custom-engine or declarative
-   agent?"). Only once the sponsor has chosen, set it:
+1. **Confirm whether this plan targets HR or IT — the only agent axis left.**
+   The create body's `configuringAgentName` is required. The ESS agent ships as
+   a **declarative agent (DA)** — that's what merges to `main` — so there is **no
+   DA-vs-custom-engine choice to make**; every plan targets the DA. The only axis
+   the sponsor still picks is **HR vs IT**:
+   - `EmployeeSelfServiceHRDA` — HR
+   - `EmployeeSelfServiceITDA` — IT
+   HR-vs-IT is usually clear from the interview; confirm it in plain language
+   ("Is this for HR or IT?") rather than guessing. Only once confirmed, set it:
    `python scripts/planner/cli.py set-agent-name --name <AgentName>`
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body

@@ -329,7 +329,9 @@ def test_render_summary_lists_tasks_in_execution_order():
     plan.add_task(new_task("T1", "consume", consumes=["envId"]))
     plan.add_task(new_task("T2", "produce", produces=["envId"]))
     summary = plan.render_summary()
-    assert summary.index("| T2 |") < summary.index("| T1 |")
+    # Task ids stay hidden (Step numbers only); the producer renders before the
+    # consumer because it must run first.
+    assert summary.index("| produce |") < summary.index("| consume |")
 
 
 # --------------------------------------------------------------------------- #
@@ -377,20 +379,24 @@ def test_dependency_marker_dedupes_and_sorts_producers():
     assert plan.dependency_marker("T1") == "P1, P2"
 
 
-def test_render_summary_shows_blocked_by_column():
+def test_render_summary_locks_dependent_tasks():
     plan = Plan.new()
     plan.add_task(new_task("T1", "consume", consumes=["envId"]))
     plan.add_task(new_task("T2", "produce", produces=["envId"]))
     summary = plan.render_summary()
-    assert "Blocked by" in summary
+    # The State cell carries the dependency signal (no numeric "Blocked by"
+    # column): the consumer waits on its producer, so it reads locked; the ready
+    # producer does not.
+    assert "Blocked by" not in summary
     rows = {
-        line.split("|")[1].strip(): line
+        line.split("|")[2].strip(): line
         for line in summary.splitlines()
-        if line.startswith("| T")
+        if line.startswith("| ") and "Not started" in line
     }
-    # Consumer row names its upstream producer; the producer row is ready ("—").
-    assert "T2" in rows["T1"].split("|")[-2]
-    assert rows["T2"].split("|")[-2].strip() == "—"
+    assert "🔒 Not started" in rows["consume"]
+    assert "🔒" not in rows["produce"]
+    # The ready task still carries an icon (design has one per state).
+    assert "⬜ Not started" in rows["produce"]
 
 
 def test_tasks_for_person_reports_waiting_on():

@@ -39,9 +39,9 @@ Summarise, don't dump the table. Cover three things:
   connected Workday; Sam finished the HR knowledge source."* If a task is `Done`
   but has no owner recorded, say it's done without inventing a name.
 - **What's next.** The tasks that can be picked up now (no unmet dependency — the
-  summary's **Blocked by** column is `—`), and who they're waiting on. Call out
-  anything **Blocked** and the upstream task it waits on, so nobody starts work
-  whose inputs don't exist yet.
+  summary's **State** column reads **⬜ Not started**, not **🔒 Not started**), and
+  who they're waiting on. Call out anything **🔒 Blocked** and the upstream task it
+  waits on, so nobody starts work whose inputs don't exist yet.
 
 Keep it to a short readout the sponsor can act on, then offer the snapshot report.
 

@@ -253,8 +253,9 @@ so the sponsor sees the plan as **Workday**, **ServiceNow**, **Setup**,
   `/flightcheck` backbone), `Authoring` (the `/create` topic tasks), `Evaluation`
   (`/evaluate`), `Publish`.
 - Keep stream labels **few and consistent** — a stream is a workstream a sponsor
-  staffs, not a per-task tag. The `Blocked by` column still carries the exact
-  cross-stream sequencing, so grouping never hides a dependency.
+  staffs, not a per-task tag. The task **State** column still carries the exact
+  cross-stream sequencing (a task waiting on an upstream artifact reads
+  **🔒 Not started**), so grouping never hides a dependency.
 
 Also register the scenarios and their dependencies (see `interview.md`) so the
 plan shows knowledge-before-ticketing. Then show the summary and go to Phase 4.
@@ -269,8 +270,9 @@ the keys don't encode; if two tasks must be ordered, wire the key.
 
 - **Parallel waves.** A *wave* is every task whose consumed keys are all produced
   by earlier waves — tasks **in the same wave have no dependency between them and
-  can run at once**. The summary's **Blocked by** column is the per-task view
-  (`—` == ready now). Present the plan as waves, not a flat list. For the Workday
+  can run at once**. The summary's **State** column is the per-task view (a task
+  still waiting on an upstream artifact reads **🔒 Not started**; a ready task is
+  **⬜ Not started**). Present the plan as waves, not a flat list. For the Workday
   backbone: environment provisioning and the firewall allowlist are both ready at
   kickoff (Wave 0); once the environment exists, **SSO (Cloud App Admin) ∥ tenant
   (Workday Admin) ∥ ESS install (Env Maker)** all open together (Wave 1) — three

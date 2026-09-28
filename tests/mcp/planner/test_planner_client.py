@@ -947,7 +947,7 @@ def test_unkeyed_create_is_not_retried_on_ambiguous_5xx(monkeypatch) -> None:
         _run(
             client,
             lambda: client.create_project_plan(
-                "proj1", {"configuringAgentName": "EmployeeSelfServiceHRCEA"}
+                "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}
             ),
         )
 
@@ -971,7 +971,7 @@ def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
     result = _run(
         client,
         lambda: client.create_project_plan(
-            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRCEA"}, "idem-1"
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}, "idem-1"
         ),
     )
 

@@ -69,10 +69,12 @@ ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "A
 PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
 # The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
 # Required on the create body, so a plan must name one before it can be pushed.
+# The ESS agent ships as a **declarative agent (DA)** — that's what merges to
+# `main` — so the custom-engine-agent (CEA) variants are intentionally not
+# offered: a plan never asks the sponsor to choose DA vs CEA, it's always DA.
+# HR vs IT is the only axis the sponsor still picks.
 CONFIGURING_AGENT_NAMES = (
-    "EmployeeSelfServiceHRCEA",
     "EmployeeSelfServiceHRDA",
-    "EmployeeSelfServiceITCEA",
     "EmployeeSelfServiceITDA",
 )
 # The ledger key the /setup task produces and downstream tasks consume — the
@@ -1676,7 +1678,8 @@ class Plan:
         ordered = self.ordered_tasks()
         # Group under a stream/theme heading when tasks carry one (e.g. "Workday",
         # "Setup", "Authoring") so the sponsor reads the plan by workstream; the
-        # per-task "Blocked by" column still shows the cross-stream sequencing.
+        # per-task State cell still shows the cross-stream sequencing (a task whose
+        # consumed artifacts aren't produced yet reads as "🔒 Not started").
         # Streams are ordered by the earliest execution position of any task in
         # them, and tasks keep execution order within a stream. A plan whose tasks
         # carry no stream renders as a single flat table (unchanged).
@@ -1699,14 +1702,40 @@ class Plan:
             lines.append("")
 
     def _render_task_table(self, lines: list[str], tasks: list[dict[str, Any]]) -> None:
-        lines.append("| # | Task | Role / owner | State | Blocked by |")
-        lines.append("|---|------|--------------|-------|------------|")
-        for task in tasks:
-            marker = self.dependency_marker(task.get("id")) or "—"
+        # Design-aligned columns: a plain Step number (internal task ids stay
+        # hidden from the sponsor), the task, its role/owner, and a State cell
+        # whose icon carries the dependency signal — ✅ Complete / In progress /
+        # 🔒 Not started (locked while an upstream task still owes a consumed
+        # artifact) / Not started (ready) / 🔒 Blocked. The lock replaces the old
+        # numeric "Blocked by T#" column so dependent tasks read the way the UX
+        # intends: you see *that* a task is gated without leaking task ids.
+        lines.append("| Step | Task | Role / owner | State |")
+        lines.append("|------|------|--------------|-------|")
+        for step, task in enumerate(tasks, start=1):
             lines.append(
-                f"| {task.get('id')} | {task.get('title')} | "
-                f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
+                f"| {step} | {task.get('title')} | "
+                f"{_render_assignee(task.get('assignedTo'))} | "
+                f"{self._task_state_label(task)} |"
             )
+
+    def _task_state_label(self, task: dict[str, Any]) -> str:
+        """The design's State cell, one icon per state. ``✅ Complete`` /
+        ``🔄 In progress`` / ``🔒 Blocked`` map the stored state directly; a
+        ``NotStarted`` task reads as ``🔒 Not started`` while it still
+        :meth:`waiting_on` an upstream artifact (the render-time dependency lock)
+        and ``⬜ Not started`` once it's ready to pick up. Pure/read-only —
+        reflects the current produces/consumes ledger, never mutates it or the
+        stored task state."""
+        state = task.get("state") or "NotStarted"
+        if state == "Completed":
+            return "✅ Complete"
+        if state == "InProgress":
+            return "🔄 In progress"
+        if state == "Blocked":
+            return "🔒 Blocked"
+        if self.waiting_on(task.get("id")):
+            return "🔒 Not started"
+        return "⬜ Not started"
 
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]

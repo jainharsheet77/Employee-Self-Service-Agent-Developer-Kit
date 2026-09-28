@@ -41,6 +41,7 @@ from planner.plan_model import (
     CONFIGURING_AGENT_NAMES,
     PLAN_PATH,
     SCENARIO_GROUP,
+    SUMMARY_FILENAME,
     Plan,
     new_task,
     plan_artifact,
@@ -556,9 +557,20 @@ def cmd_summary(args: argparse.Namespace) -> int:
     plan = _load(args)
     directory = os.path.dirname(os.fspath(args.plan)) or "."
     print(plan.render_summary(research=read_research_context(directory)))
-    # Assistant-facing reminder on stderr (never part of the sponsor-facing
-    # Markdown, which is stdout/file only): a built plan that isn't on the shared
-    # planner yet must be published now — see src/skills/planner/sync.md -> Push.
+    # Assistant-facing hints on stderr (never part of the sponsor-facing Markdown,
+    # which is stdout/file only). Point at the saved artifact so the agent surfaces
+    # it in chat as a downloadable file — "Plan created — ESS-scenario-plan.md" +
+    # link — instead of only echoing the body (Bug 7952898). The mutating commands
+    # already wrote it via save_all; summary is read-only.
+    if plan.tasks:
+        print(
+            "artifact: the plan Markdown is saved at "
+            f"{os.path.join(directory, SUMMARY_FILENAME)} — surface it in chat as a "
+            "downloadable file before showing the body.",
+            file=sys.stderr,
+        )
+    # A built plan that isn't on the shared planner yet must be published now —
+    # see src/skills/planner/sync.md -> Push.
     if plan.tasks and not plan.data.get("planId"):
         print(
             "reminder: this plan is not yet saved to the shared planner — publish "

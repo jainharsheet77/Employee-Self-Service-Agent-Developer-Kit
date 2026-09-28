@@ -23,7 +23,7 @@ from planner.plan_model import (
     principal_pool,
 )
 
-HR_AGENT = "EmployeeSelfServiceHRCEA"
+HR_AGENT = "EmployeeSelfServiceHRDA"
 PAUL = "00000000-0000-0000-0000-0000000000b1"
 
 
