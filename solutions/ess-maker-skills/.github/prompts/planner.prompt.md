@@ -11,9 +11,10 @@ the phase files (research, interview, model, assign, evaluate, capture), the syn
 file (pull/push the plan with the shared planner), the Flow-2 "what am I
 assigned?" file, and the status/report file.
 
-**This is the one experience allowed before setup**, and it's exactly what a
-first-time *"I want to set up ESS — where do I start?"* question needs — route
-such questions here, not straight to `/setup`. On a brand-new tenant nothing is
+**This is the one experience allowed before setup.** The maker reached here by an
+**explicit** planning request (`/planner`, "plan a rollout", "create a plan") or
+by choosing "Plan your ESS rollout" from the first-run setup gate — either way,
+proceed with planning. On a brand-new tenant nothing is
 set up yet — planning is how the rollout is decided — so do not block on
 `.local/config.json` being `"complete"`. Read it if it exists (to reuse the
 environment/agent details), then proceed. The plan's first task is almost always
