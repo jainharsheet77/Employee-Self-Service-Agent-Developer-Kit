@@ -228,9 +228,12 @@ python scripts/planner/cli.py setup-tasks --system workday --commands --skip-fou
 #       tenant -> WorkdayAdmin, pack+connect -> PowerPlatformEnvironmentMaker,
 #       firewall -> EntraNetworkAdministrator, first topic -> PowerPlatformEnvironmentMaker.
 #    Each printed row already carries --stream "Workday" so they group together.
-# 4. ServiceNow — decompose per its OWN checklist role: items; split like Workday
-#    (config is a ServiceNow Administrator task; the pack install an Environment Maker one)
-python scripts/planner/cli.py add-task --id T-sn-config --stream "ServiceNow" --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per its checklist — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment
+# 4. ServiceNow — unlike Workday, it ships NO grounded checklist (setup-tasks only
+#    grounds Workday today, and `system_setup_tasks("servicenow")` raises). So DON'T
+#    imply a checklist: decompose ServiceNow from your Phase-1 research, splitting it
+#    along the same role boundaries as Workday (config is a ServiceNow Administrator
+#    task; the pack install an Environment Maker one).
+python scripts/planner/cli.py add-task --id T-sn-config --stream "ServiceNow" --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per the connect research for ServiceNow — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment
 python scripts/planner/cli.py add-task --id T-sn-connect --stream "ServiceNow" --title "Install ServiceNow pack and connect" --description "Run /connect to install the ServiceNow extension pack and create the connection" --role PowerPlatformEnvironmentMaker --produces servicenowConnection --consumes "primaryEnvironment,servicenowConfig"
 # 5. authoring per scenario area (knowledge before ticketing — register the dependency)
 python scripts/planner/cli.py add-task --id T-know --stream "Authoring" --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes primaryEnvironment

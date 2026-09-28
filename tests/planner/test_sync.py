@@ -17,6 +17,7 @@ import pytest
 from planner import cli, sync
 from planner.plan_model import (
     ACCEPTANCE_GROUP,
+    STREAM_GROUP,
     Plan,
     new_task,
     principal_person,
@@ -353,6 +354,65 @@ def test_export_then_hydrate_preserves_core():
     owner = data["tasks"][1]["assignedTo"]
     assert owner["type"] == "User" and owner["user"]["oid"] == PAUL
     assert Plan(data).validate() == []
+
+
+def _streamed_plan() -> Plan:
+    plan = Plan.new(objective="Stand up ESS on Workday")
+    plan.set_configuring_agent_name(HR_AGENT)
+    plan.add_task(
+        new_task("t1", "Configure Workday", stream="Workday",
+                 assigned_to=principal_pool("WorkdayAdmin"))
+    )
+    plan.add_task(new_task("t2", "Author HR topic", stream="Authoring"))
+    plan.add_task(new_task("t3", "No stream task"))
+    return plan
+
+
+def test_export_carries_task_stream_as_context():
+    body = sync.to_remote_plan_body(_streamed_plan())
+    # Top-level shape is unchanged (stream rides inside the allowed context field).
+    assert set(body) <= {"configuringAgentName", "acceptanceCriteria", "context", "tasks"}
+    carriers = {e["key"]: e["value"] for e in body["context"] if e.get("group") == STREAM_GROUP}
+    assert carriers == {"stream:Configure Workday": "Workday", "stream:Author HR topic": "Authoring"}
+    # Tasks with no stream contribute no carrier.
+    assert "stream:No stream task" not in carriers
+
+
+def test_export_then_hydrate_preserves_task_stream():
+    plan = _streamed_plan()
+    body = sync.to_remote_plan_body(plan)
+    echoed_tasks = []
+    for index, task_body in enumerate(body["tasks"], start=1):
+        echoed = dict(task_body)
+        echoed["taskId"] = f"srv-{index}"
+        echoed_tasks.append(echoed)
+    plan_entity = {
+        "planId": "srv-plan",
+        "configuringAgentName": body["configuringAgentName"],
+        "status": "Draft",
+        "context": body["context"],
+    }
+    data = sync.hydrate_from_remote(plan_entity, {"value": echoed_tasks})
+
+    streams = {t["title"]: t.get("stream", "") for t in data["tasks"]}
+    assert streams == {"Configure Workday": "Workday", "Author HR topic": "Authoring", "No stream task": ""}
+    # The carrier group is an internal vehicle — it never lands in local context.
+    assert all(e.get("group") != STREAM_GROUP for e in data["context"])
+    assert Plan(data).validate() == []
+
+
+def test_reexport_after_hydrate_does_not_duplicate_stream_carriers():
+    body = sync.to_remote_plan_body(_streamed_plan())
+    echoed_tasks = [dict(tb, taskId=f"srv-{i}") for i, tb in enumerate(body["tasks"], start=1)]
+    data = sync.hydrate_from_remote(
+        {"configuringAgentName": body["configuringAgentName"], "status": "Draft",
+         "context": body["context"]},
+        {"value": echoed_tasks},
+    )
+    reexported = sync.to_remote_plan_body(Plan(data))
+    carriers = [e for e in reexported["context"] if e.get("group") == STREAM_GROUP]
+    # Re-derived from the tasks, not echoed from context — so still exactly two.
+    assert sorted(e["value"] for e in carriers) == ["Authoring", "Workday"]
 
 
 def test_stamp_remote_ids():

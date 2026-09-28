@@ -21,7 +21,7 @@ python scripts/planner/cli.py check-deps
 ```
 
 `summary` gives the objective, every task with its **state** (NotStarted /
-InProgress / Done / Blocked) and owner, the scenario dependencies, and what each
+InProgress / Completed / Blocked) and owner, the scenario dependencies, and what each
 task has **produced** so far. `check-deps` shows which scenario prerequisites are
 met vs missing. (If the shared planner is reachable, pull first — `sync.md` — so
 you're reporting the shared truth, not a stale local cache.)
@@ -34,14 +34,17 @@ Summarise, don't dump the table. Cover three things:
   the streams (setup → connect → author → evaluate → publish): the furthest stage
   with completed work, and what's in flight. E.g. *"Environment is set up and
   ServiceNow is connected; HR knowledge authoring is in progress."*
-- **Recent tasks completed — and who did them.** List the tasks now `Done` and the
+- **Recent tasks completed — and who did them.** List the tasks now `Completed` and the
   person/role that owns each (from the assignment on the task). E.g. *"Priya
-  connected Workday; Sam finished the HR knowledge source."* If a task is `Done`
+  connected Workday; Sam finished the HR knowledge source."* If a task is `Completed`
   but has no owner recorded, say it's done without inventing a name.
-- **What's next.** The tasks that can be picked up now (no unmet dependency — the
-  summary's **State** column reads **⬜ Not started**, not **🔒 Not started**), and
-  who they're waiting on. Call out anything **🔒 Blocked** and the upstream task it
-  waits on, so nobody starts work whose inputs don't exist yet.
+- **What's next.** The tasks that can be picked up now — those whose state is
+  **NotStarted** *and* whose dependencies are met (the summary's **State** column
+  reads **⬜ Not started**, not **🔒 Not started**), and who they're waiting on. A
+  cleared dependency alone isn't enough: an `InProgress`, `Completed`, or `Blocked`
+  task can also show a clear dependency marker, so filter to **NotStarted** before
+  presenting anything as "next". Call out anything **🔒 Blocked** and the upstream
+  task it waits on, so nobody starts work whose inputs don't exist yet.
 
 Keep it to a short readout the sponsor can act on, then offer the snapshot report.
 
@@ -51,15 +54,19 @@ If they want something to share or keep, write a **static markdown snapshot** of
 the status — a picture of this moment, not a live document:
 
 - Write it to **`workspace/plan/reports/`** as
-  **`<YYYYMMDD>-ESSdeploymentReport.md`** (e.g.
-  `workspace/plan/reports/20260703-ESSdeploymentReport.md`). Create the `reports/`
-  folder if it doesn't exist.
+  **`<YYYYMMDD-HHMMSS>-ESSdeploymentReport.md`** (e.g.
+  `workspace/plan/reports/20260703-142530-ESSdeploymentReport.md`). Create the
+  `reports/` folder if it doesn't exist. The **time** component matters: every
+  request must produce a **new** file, and a date-only name would collide when two
+  snapshots are taken the same day. If a file with that exact timestamp somehow
+  already exists, append a short numeric suffix (`-2`, `-3`, …) so an existing
+  snapshot is never overwritten.
 - This folder is **only for deployment-plan reports**. It is deliberately separate
   from FlightCheck's readiness output (`workspace/flightcheck/`) so the two report
   kinds never mix.
 - The report is **static**: once written it is **not** updated over time. A later
-  status request writes a **new** dated file; it never rewrites an old one. That's
-  the point — each file is a snapshot you can compare against.
+  status request writes a **new** timestamped file; it never rewrites an old one.
+  That's the point — each file is a snapshot you can compare against.
 
 Compose the report yourself from what Step 1 read — do not invent content and do
 not call a generator; this is a formatted view of the plan. Include:
@@ -98,7 +105,7 @@ status report you can share"), never the raw path.
 - **Don't** change the plan while reporting status — this flow is **read-only**
   (plus writing the snapshot file). Task state changes go through capture
   (`src/skills/planner/capture.md`), not here.
-- **Don't** update or overwrite an existing dated report; each request is a new
-  snapshot.
+- **Don't** update or overwrite an existing timestamped report; each request is a
+  new snapshot.
 - **Don't** put deployment reports in the FlightCheck folder, or FlightCheck
   results in `workspace/plan/reports/` — keep the two separate.

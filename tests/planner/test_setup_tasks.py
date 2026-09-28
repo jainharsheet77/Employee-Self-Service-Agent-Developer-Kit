@@ -193,7 +193,11 @@ class TestWorkdayDecomposition:
         by_id = {t.task_id: t for t in system_setup_tasks("workday")}
         assert by_id["workday-pp-environment"].produces == ["primaryEnvironment"]
         assert by_id["workday-sso-entra"].produces == ["workdayEntraApp"]
-        assert by_id["workday-pack-connect"].consumes == ["workdayEntraApp", "workdayTenantConfig"]
+        # pack + connect also consumes the firewall allowlist, so Workday
+        # connectivity stays locked until InfoSec/IT has opened the network path.
+        assert by_id["workday-pack-connect"].consumes == [
+            "workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"
+        ]
         assert by_id["workday-firewall-allowlist"].produces == ["workdayNetworkAllowlist"]
         assert by_id["workday-first-topic"].produces == ["topic:workday"]
 

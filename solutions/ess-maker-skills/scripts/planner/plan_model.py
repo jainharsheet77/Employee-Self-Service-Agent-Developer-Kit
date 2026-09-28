@@ -42,6 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .attestable import resolve_attestable_role_id
+
 SCHEMA_VERSION = 1
 
 # Default on-disk locations (relative to the kit root — the cwd the skill runs
@@ -107,6 +109,20 @@ SCENARIO_CONTEXT_GROUP = "scenarioContext"
 CAPABILITY_GROUP = "scenarioCapability"
 SYSTEM_GROUP = "system"
 
+# A per-task workstream label (``task["stream"]``) is a local-only rendering hint,
+# but the service task schema has no field for it. So the sync seam round-trips it
+# as plan Context under this group — written on export, reattached to tasks and
+# stripped from Context on import — keeping the grouped task view stable across a
+# publish/pull cycle. Never surfaced to the maker (see ``_STRUCTURED_GROUPS``).
+STREAM_GROUP = "taskStream"
+
+# A maker-uploaded task owner that doesn't resolve to a closed attestable role is
+# kept here (not on the assignment, which the service would reject on publish) so
+# the interview can confirm the real owner instead of silently dropping the intent.
+# Deliberately NOT in ``_STRUCTURED_GROUPS`` — it surfaces under "More context".
+UNMAPPED_ROLE_GROUP = "unmappedRole"
+
+
 # Groups the readable Markdown sections already consume; anything else falls
 # through to the generic "More context" block (keeps the view lossless).
 _STRUCTURED_GROUPS = frozenset(
@@ -120,6 +136,7 @@ _STRUCTURED_GROUPS = frozenset(
         CAPABILITY_GROUP,
         SYSTEM_GROUP,
         DEPENDS_ON_GROUP,
+        STREAM_GROUP,
     }
 )
 
@@ -1063,7 +1080,10 @@ class Plan:
 
         Returns a count of what was ingested (for the skill's read-back). Raises
         ``ValueError`` on a malformed entry (a scenario/task with no id) so a bad
-        parse fails loudly instead of persisting a half-built plan.
+        parse fails loudly instead of persisting a half-built plan. A task ``role``
+        is mapped to its canonical attestable id; an unrecognized one is left off
+        the assignment and recorded under ``UNMAPPED_ROLE_GROUP`` (a gap to confirm,
+        never a role the shared planner would reject on publish).
         """
         counts = {
             "objective": 0, "market": 0, "persona": 0, "jtbd": 0,
@@ -1150,7 +1170,7 @@ class Plan:
                 slug = slugify(cap_text) or f"cap-{counts['capabilities'] + 1}"
                 self.set_context(
                     f"{sid}.{slug}", cap_text, group=CAPABILITY_GROUP,
-                    description="Enabled scenario from the uploaded plan", source="Agent",
+                    description="Enabled scenario from the uploaded plan", source=source,
                 )
                 counts["capabilities"] += 1
 
@@ -1165,7 +1185,7 @@ class Plan:
                 scenario, depends_on,
                 kind=clean(dep.get("kind")) or "requires",
                 rationale=clean(dep.get("rationale")) or "From the uploaded plan",
-                source="Agent",
+                source=source,
             )
             counts["scenarioDependencies"] += 1
 
@@ -1178,11 +1198,26 @@ class Plan:
                 raise ValueError(f"uploaded task needs both an id and a title: {tsk!r}")
             role = clean(tsk.get("role"))
             person = clean(tsk.get("person"))
+            # The shared planner only pools/attests tasks against the closed
+            # attestable-role set, so map the uploaded label to its canonical
+            # compact id. A non-attestable label (e.g. "Power Platform Admin") is
+            # NOT attached — it would fail on publish — but it's recorded as a gap
+            # so the interview can confirm the real owner rather than lose the intent.
+            role_id = resolve_attestable_role_id(role) if role else None
+            if role and role_id is None:
+                self.set_context(
+                    f"task-role.{tid}", role, group=UNMAPPED_ROLE_GROUP,
+                    description=(
+                        f"Uploaded owner for task '{title}' ({role!r}) isn't a "
+                        "recognized attestable role — confirm who owns it"
+                    ),
+                    source=source,
+                )
             assigned: dict[str, Any] | None = None
             if person:
-                assigned = principal_person(person, role_id=role or None)
-            elif role:
-                assigned = principal_pool(role)
+                assigned = principal_person(person, role_id=role_id or None)
+            elif role_id:
+                assigned = principal_pool(role_id)
             self.add_task(
                 new_task(
                     tid, title,

@@ -305,7 +305,11 @@ _WORKDAY_SLOTS: dict[tuple[int, str], _Slot] = {
         title="Install the Workday extension pack and connect",
         how="Run /connect to install the Workday extension pack, bind the Workday and Dataverse connections to your account, set the Workday REST address, turn on the cloud flows, and wire up the employee-context lookup",
         produces=("workdayConnection",),
-        consumes=("workdayEntraApp", "workdayTenantConfig"),
+        # Also consumes the firewall allowlist: /connect binds the connection and
+        # exercises the Workday REST endpoint, so it stays locked until InfoSec/IT
+        # has opened the network path (otherwise the graph would mark Workday
+        # connectivity ready while the firewall change is still outstanding).
+        consumes=("workdayEntraApp", "workdayTenantConfig", "workdayNetworkAllowlist"),
         command="/connect",
     ),
     (5, "infosec-it"): _Slot(

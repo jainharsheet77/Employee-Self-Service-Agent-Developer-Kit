@@ -115,6 +115,47 @@ def test_ingest_upload_assigns_task_role_and_scalars_coerce():
     assert plan.validate() == []
 
 
+def test_ingest_upload_maps_wire_display_role_to_compact_id():
+    plan = Plan.new()
+    # A maker who wrote the human display name (not the compact id) still pools
+    # to the canonical attestable id the service accepts.
+    plan.ingest_upload({
+        "objective": "Do ESS",
+        "tasks": [{"id": "T1", "title": "Configure Workday", "role": "Workday administrator"}],
+    })
+    task = next(t for t in plan.tasks if t["id"] == "T1")
+    assert assignee_role_id(task["assignedTo"]) == "WorkdayAdmin"
+
+
+def test_ingest_upload_non_attestable_role_is_not_assigned_and_records_gap():
+    plan = Plan.new()
+    plan.ingest_upload({
+        "objective": "Do ESS",
+        "tasks": [{"id": "T1", "title": "Wire something", "role": "Power Platform Admin"}],
+    })
+    task = next(t for t in plan.tasks if t["id"] == "T1")
+    # Not attached — a bad pool role would 400 on publish to the shared planner.
+    assert task["assignedTo"] == {}
+    # But the intent is preserved as a gap for the interview to resolve.
+    gap = next(e for e in plan.context if e.get("key") == "task-role.T1")
+    assert gap["value"] == "Power Platform Admin"
+    assert gap["group"] == "unmappedRole"
+    assert plan.validate() == []
+
+
+def test_ingest_upload_person_keeps_owner_but_drops_non_attestable_role():
+    plan = Plan.new()
+    plan.ingest_upload({
+        "objective": "Do ESS",
+        "tasks": [{"id": "T1", "title": "Owned", "person": PAUL, "role": "Some Future Role"}],
+    })
+    task = next(t for t in plan.tasks if t["id"] == "T1")
+    # The person still owns it; only the unrecognized grounding role is dropped.
+    assert assignee_user_oid(task["assignedTo"]) == PAUL
+    assert assignee_role_id(task["assignedTo"]) is None
+    assert any(e.get("key") == "task-role.T1" for e in plan.context)
+
+
 def test_ingest_upload_scenario_without_id_raises():
     plan = Plan.new()
     with pytest.raises(ValueError):

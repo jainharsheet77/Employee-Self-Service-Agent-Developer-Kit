@@ -39,6 +39,7 @@ from planner.plan_model import (
     CONFIGURING_AGENT_NAMES,
     PLAN_STATES,
     SCHEMA_VERSION,
+    STREAM_GROUP,
     Plan,
     assignee_role_id,
     assignee_user_oid,
@@ -49,6 +50,13 @@ from planner.plan_model import (
     principal_person,
     principal_pool,
 )
+
+# The service task schema has no ``stream`` field, so ``to_remote_plan_body``
+# round-trips each streamed task's label as a Context entry under ``STREAM_GROUP``,
+# keyed by ``"<prefix><task title>"``. ``hydrate_from_remote`` reattaches it to the
+# task by title and drops the carrier entry, so the grouped task view survives a
+# publish/pull cycle without leaking an internal group into the local plan.
+_STREAM_KEY_PREFIX = "stream:"
 
 # The service's PlanTaskState enum, in declaration order (so an integer wire
 # value can be resolved positionally). Only ``Cancelled`` differs from the local
@@ -195,6 +203,10 @@ def to_remote_plan_body(
         if entry.get("group") == ACCEPTANCE_GROUP:
             acceptance.append(entry.get("value"))
             continue
+        # Stream carriers are re-derived from the tasks below, so never echo a
+        # stale one back (keeps the round-trip idempotent).
+        if entry.get("group") == STREAM_GROUP:
+            continue
         item: dict[str, Any] = {"key": entry.get("key"), "value": entry.get("value")}
         group = entry.get("group")
         if group:
@@ -203,6 +215,19 @@ def to_remote_plan_body(
         if description:
             item["description"] = description
         context.append(item)
+
+    # Carry each task's local-only ``stream`` label through the service as Context
+    # (the task schema has no field for it) so the grouped task view is preserved
+    # after a publish/pull round-trip. Reattached and stripped by import.
+    for task in plan.tasks:
+        stream = (task.get("stream") or "").strip()
+        title = (task.get("title") or "").strip()
+        if stream and title:
+            context.append({
+                "key": f"{_STREAM_KEY_PREFIX}{title}",
+                "value": stream,
+                "group": STREAM_GROUP,
+            })
 
     body: dict[str, Any] = {"configuringAgentName": name}
     if acceptance:
@@ -372,14 +397,26 @@ def hydrate_from_remote(
         tasks_raw = _as_entities(task_entities)
 
     context: list[dict[str, Any]] = []
+    task_streams: dict[str, str] = {}
     for entry in _list(plan_entity, "context", "Context"):
         if not isinstance(entry, dict):
+            continue
+        group = _scalar(entry, "group", "Group", default="")
+        # Stream carriers are an internal round-trip vehicle, not maker context:
+        # capture them (title -> stream) to reattach to tasks below, then drop them
+        # so the local plan never carries the ``taskStream`` group.
+        if group == STREAM_GROUP:
+            key = _scalar(entry, "key", "Key", default="")
+            title = key[len(_STREAM_KEY_PREFIX):] if key.startswith(_STREAM_KEY_PREFIX) else key
+            stream = _scalar(entry, "value", "Value", default="")
+            if title and stream:
+                task_streams[title] = stream
             continue
         context.append(
             context_entry(
                 _scalar(entry, "key", "Key", default=""),
                 _scalar(entry, "value", "Value", default=""),
-                group=_scalar(entry, "group", "Group", default="") or None,
+                group=group or None,
                 description=_scalar(entry, "description", "Description", default="") or None,
                 source="Agent",
             )
@@ -398,6 +435,12 @@ def hydrate_from_remote(
         )
 
     tasks = [_task_from_remote(t) for t in tasks_raw if isinstance(t, dict)]
+    # Reattach the workstream labels the service can't store natively.
+    if task_streams:
+        for task in tasks:
+            stream = task_streams.get((task.get("title") or "").strip())
+            if stream:
+                task["stream"] = stream
     outputs = [_output_from_remote(a) for a in _list(plan_entity, "outputs", "Outputs") if isinstance(a, dict)]
 
     return {
