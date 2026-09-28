@@ -42,9 +42,27 @@ overwrite corrupt state silently.
 
 **First run only — confirm the maker actually wants environment setup.** If the
 state just initialized above shows no completed steps and the active step is
-still the first (`SETUP-01`), this is a first `/setup`. Ask one question before
-going any further. Skip it on any resume (a step already completed, or the active
-step has advanced) — a resume proceeds directly to dispatch and needs no input.
+still the first (`SETUP-01`), this is a first `/setup`. Skip the question on any
+resume (a step already completed, or the active step has advanced) — a resume
+proceeds directly to dispatch and needs no input, and `/setup` is never asked
+again once environment setup is under way.
+
+On that genuine first run, first check whether the maker is **already planning**:
+if `workspace/plan/plan.json` exists, they already started an ESS plan (via
+`/planner`), so a separate `/setup` is **not required** — the plan already carries
+the "run `/setup`" task for when an environment is actually needed. Do **not** show
+the choice below: show the **plan-in-progress message**, then read
+`src/skills/planner/SKILL.md` and resume their plan — unless they explicitly ask to
+configure the environment now, in which case continue the foundation setup below.
+Only when **no** plan exists yet, ask one question before going any further.
+
+**Message — a plan is already in progress:**
+
+You already have an ESS plan going, so you don't need to run setup as a separate
+step — your plan includes the environment setup when it's needed. I'll pick your
+plan back up. If you'd rather configure the environment right now, just say so.
+
+**End message.**
 
 Use the `vscode_askQuestions` tool:
 
