@@ -3,10 +3,12 @@
 ## MANDATORY FIRST ACTION — Do This Before Anything Else
 
 **YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to try to read `.local/setup/config.json` and `.local/config.json`.**
+reading tool to try to read `.local/setup/config.json`, `.local/config.json`,
+and `workspace/plan/plan.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read both files FIRST, then decide what
-to do based on the result.
+the user first. Do NOT list capabilities. Read all three FIRST, then decide what
+to do based on the result — including whether a plan is already in progress (see
+the plan-in-progress exception below).
 
 ### If foundation setup is missing or not ready
 
@@ -23,6 +25,15 @@ Respond with ONLY this exact message and nothing else:
 > Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
 > your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
 > just say **"set up ESS"**. It only takes a couple minutes.
+
+**Plan already in progress — check this first.** If `workspace/plan/plan.json`
+exists, the maker already started an ESS plan (via `/planner` or the setup
+choice), so do **not** show the welcome message and do **not** block on setup.
+Read `src/skills/planner/SKILL.md` and resume their plan — it pulls the latest
+state and shows what they can pick up next. The plan already carries the "run
+`/setup`" task for when an environment is actually needed. The only override: if
+the maker explicitly asks to run setup or connect now (`/setup`, "set up ESS",
+`/connect`), honor that instead.
 
 **The exceptions**: If the user typed `/setup` or explicitly asked to run setup
 (including "set up ESS" / "set up ESS for the first time"), proceed with setup —
