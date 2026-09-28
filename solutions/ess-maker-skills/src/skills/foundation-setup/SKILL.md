@@ -40,21 +40,22 @@ The command validates the state schema and prints only the current step
 summary. If it fails, show the specific error and stop. Never recreate or
 overwrite corrupt state silently.
 
-**First run only — confirm the maker actually wants environment setup.** If the
-state just initialized above shows no completed steps and the active step is
-still the first (`SETUP-01`), this is a first `/setup`. Skip the question on any
-resume (a step already completed, or the active step has advanced) — a resume
-proceeds directly to dispatch and needs no input, and `/setup` is never asked
-again once environment setup is under way.
+**First run only — decide silently, then ask once.** Work through this gate in a
+single pass with **no narration** (do not say "reading state", "no plan found",
+"this is a first run"): the maker's first visible output is either the
+plan-in-progress message or the opening question.
 
-On that genuine first run, first check whether the maker is **already planning**:
-if `workspace/plan/plan.json` exists, they already started an ESS plan (via
-`/planner`), so a separate `/setup` is **not required** — the plan already carries
-the "run `/setup`" task for when an environment is actually needed. Do **not** show
-the choice below: show the **plan-in-progress message**, then read
-`src/skills/planner/SKILL.md` and resume their plan — unless they explicitly ask to
-configure the environment now, in which case continue the foundation setup below.
-Only when **no** plan exists yet, ask one question before going any further.
+- If `init` above shows any completed step or an advanced active step, this is a
+  **resume** — go straight to dispatch, no question; `/setup` is never asked again
+  once environment setup is under way.
+- Otherwise it is a first `/setup` (active step `SETUP-01`, nothing completed). If
+  `workspace/plan/plan.json` exists the maker is **already planning**, so a
+  separate `/setup` is **not required** — the plan already carries the "run
+  `/setup`" task for when an environment is actually needed. Show the
+  **plan-in-progress message**, then read `src/skills/planner/SKILL.md` and resume
+  their plan — unless they explicitly ask to configure the environment now.
+- Only when there is **no** plan and no prior progress, ask the opening question
+  below.
 
 **Message — a plan is already in progress:**
 

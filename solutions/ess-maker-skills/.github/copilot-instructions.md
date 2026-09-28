@@ -8,7 +8,10 @@ and `workspace/plan/plan.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
 the user first. Do NOT list capabilities. Read all three FIRST, then decide what
 to do based on the result — including whether a plan is already in progress (see
-the plan-in-progress exception below).
+the plan-in-progress exception below). Do the reads and this routing decision
+**silently, in one pass** — do not narrate them ("config missing", "setup not
+ready", "starting setup", "loading instructions"). The maker's first visible
+output is the welcome message, the resumed plan, or the skill you route to.
 
 ### If foundation setup is missing or not ready
 
