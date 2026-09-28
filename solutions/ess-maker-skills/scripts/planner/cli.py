@@ -558,15 +558,19 @@ def cmd_summary(args: argparse.Namespace) -> int:
     directory = os.path.dirname(os.fspath(args.plan)) or "."
     print(plan.render_summary(research=read_research_context(directory)))
     # Assistant-facing hints on stderr (never part of the sponsor-facing Markdown,
-    # which is stdout/file only). Point at the saved artifact so the agent surfaces
-    # it in chat as a downloadable file — "Plan created — ESS-scenario-plan.md" +
-    # link — instead of only echoing the body (Bug 7952898). The mutating commands
-    # already wrote it via save_all; summary is read-only.
+    # which is stdout/file only). The plan Markdown is written by THIS CLI — a
+    # subprocess — so the VS Code chat window never surfaces it on its own; it
+    # appears only if the agent renders a clickable Markdown link to it in its
+    # reply. Hand the agent that exact line so it can't be skipped, and forward-
+    # slash the path (VS Code doesn't resolve backslash links). See Bug 7952898.
     if plan.tasks:
+        artifact_path = os.path.join(directory, SUMMARY_FILENAME)
+        link = artifact_path.replace(os.sep, "/")
         print(
-            "artifact: the plan Markdown is saved at "
-            f"{os.path.join(directory, SUMMARY_FILENAME)} — surface it in chat as a "
-            "downloadable file before showing the body.",
+            f"artifact: the maker's plan is saved at {artifact_path}. Surface it in "
+            "chat as a downloadable file BEFORE the plan body — render this markdown "
+            "line verbatim (do not just print the path in prose):\n"
+            f"    \U0001F4C4 [ESS-scenario-plan.md]({link}) — download or edit your plan",
             file=sys.stderr,
         )
     # A built plan that isn't on the shared planner yet must be published now —

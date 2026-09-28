@@ -121,8 +121,11 @@ model → assign), publish it in **one** create call rather than task-by-task:
    to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
    the temp file. The plan is now cached as **Draft** with real ids.
 5. **Show the plan and ask the sponsor whether to activate it.** Present the plan
-   and offer the Markdown for them to **download and review** (the render is in
-   `src/skills/planner/SKILL.md`). The plan is already Draft with its assignees
+   and offer the Markdown for them to **download and review** — render its clickable
+   link in chat first (the `summary` command prints the exact
+   `📄 [ESS-scenario-plan.md](…)` line; emit it verbatim, above the body — see
+   *Building the plan* in `src/skills/planner/SKILL.md`). The plan is already Draft
+   with its assignees
    baked in, and a Draft's tasks are **read-only** until it's Active — so the
    real choice now is simply *when* to activate:
    - **Activate now** — the plan is ready to run; go to step 6. Activation makes

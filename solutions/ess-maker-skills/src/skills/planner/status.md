@@ -93,8 +93,16 @@ not call a generator; this is a formatted view of the plan. Include:
 - <scenario> — <system> — <met / prerequisite missing>
 ```
 
-Then tell them it's saved and where to find it — in their terms ("I've saved a
-status report you can share"), never the raw path.
+Then **surface it as a downloadable link in chat** — a clickable Markdown link to
+the file you just wrote, so they can open or save it, e.g.
+
+```
+📄 [20260703-142530-ESSdeploymentReport.md](workspace/plan/reports/20260703-142530-ESSdeploymentReport.md) — download your status report
+```
+
+(use the real filename you wrote). Say it in their terms too ("I've saved a status
+report you can share") — the link carries the file, so you never paste a bare path
+in prose.
 
 ## Do / don't
 

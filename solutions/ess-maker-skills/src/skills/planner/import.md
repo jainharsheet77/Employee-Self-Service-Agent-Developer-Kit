@@ -153,9 +153,11 @@ status of everything as their team makes progress:
 > what I understood: objective …, scenarios …, systems ….
 
 Hand them the **ESS scenario plan** document as the editable, downloadable view of
-that tracker (the CLI regenerates `workspace/plan/ESS-scenario-plan.md` on every
-change). This is the make-sense-of-it moment — let them correct anything that
-mis-mapped before you go on.
+that tracker: **render its clickable link in chat first** — the `summary` command
+prints the exact `📄 [ESS-scenario-plan.md](…)` line; emit it verbatim, above the
+readback, so they can open, save, or re-upload it. The CLI regenerates
+`workspace/plan/ESS-scenario-plan.md` on every change. This is the make-sense-of-it
+moment — let them correct anything that mis-mapped before you go on.
 
 ## Step 5 — Complete it against their goals (ask the gaps *and* propose the missing work)
 

@@ -90,7 +90,8 @@ have checked for an existing plan.**
      **⬜ Not started**, a running one **🔄 In progress**, a finished one
      **✅ Complete**). Call out the locked tasks when you present the plan so
      nobody starts a task whose inputs don't exist yet. Present it in plain
-     language.
+     language — and **surface the plan's downloadable link first** (the `summary`
+     command prints the exact line; see *Building the plan* below).
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
      front of you (Flow 2): the shared planner already stores the role→person
      mapping, so ask it for the caller's tasks with
@@ -191,12 +192,21 @@ importing it (`src/skills/planner/import.md`): make sense of it, persist it, and
 ask only for the gaps — then work the remaining phases from there. After every
 phase that changes the plan the CLI regenerates the human view
 (`workspace/plan/ESS-scenario-plan.md`); at natural checkpoints show the sponsor
-`python scripts/planner/cli.py summary`. **When you present a built or updated
-plan, surface that file as a downloadable artifact in chat** — announce it
-("✓ Plan created — ESS-scenario-plan.md") with a link/attachment to
-`workspace/plan/ESS-scenario-plan.md` *before* you show the body, so the maker can
-save or hand it off, not just read it inline (Bug 7952898). The `summary` command
-prints an `artifact:` path on stderr as the reminder. During the interview (Phase 2), once
+`python scripts/planner/cli.py summary`. **Whenever you present a plan — freshly
+built, updated, imported, or resumed — you MUST surface its file as a downloadable
+link in chat *first*, before the readback. This is required, not optional, and it
+is not the same as printing a path in prose.** The plan Markdown is written by the
+CLI (a subprocess), so the chat window never shows it on its own — it appears only
+when you render a clickable Markdown link to it yourself. The `summary` command
+prints that exact line on stderr under `artifact:`; render it **verbatim, above the
+plan body**, e.g.:
+
+```
+📄 [ESS-scenario-plan.md](workspace/plan/ESS-scenario-plan.md) — download or edit your plan
+```
+
+so the maker can save or hand it off, not just read it inline (Bug 7952898). During
+the interview (Phase 2), once
 scenarios + goals are captured, render the **eager eval preview** (Phase 5,
 `src/skills/planner/evaluate.md`) — render-only, it generates nothing; **Phase 6**
 (capture) runs later as each Task executes. Once the plan exists, hand the editor
