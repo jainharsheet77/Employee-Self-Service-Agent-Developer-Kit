@@ -213,6 +213,30 @@ def test_missing_slots_is_read_only_and_shrinks():
     assert len(after) < before
 
 
+def test_missing_slots_flags_unmapped_task_owner():
+    # An uploaded task whose role isn't attestable and that names no person is
+    # unowned — the gap must surface so the interview can ask. Previously the
+    # unmappedRole breadcrumb was never read, so this reported "nothing missing".
+    plan = Plan.new(objective="Do ESS")
+    plan.ingest_upload({
+        "tasks": [{"id": "T1", "title": "Wire something", "role": "Power Platform Admin"}],
+    })
+    required = {g["slot"] for g in plan.missing_slots()["required"]}
+    assert "task-role.T1" in required
+
+
+def test_missing_slots_skips_unmapped_role_once_task_has_owner():
+    # Same unrecognized role, but a person owns the task — the owner is known, so
+    # the breadcrumb must not resurface as a gap (the ask/re-check loop converges).
+    plan = Plan.new(objective="Do ESS")
+    plan.ingest_upload({
+        "tasks": [{"id": "T1", "title": "Owned", "person": PAUL, "role": "Some Future Role"}],
+    })
+    assert any(e.get("key") == "task-role.T1" for e in plan.context)
+    required = {g["slot"] for g in plan.missing_slots()["required"]}
+    assert "task-role.T1" not in required
+
+
 # ---- CLI: ingest-upload + gaps -------------------------------------------- #
 
 def test_cli_ingest_upload_writes_plan_and_reports_gaps(tmp_path, capsys):

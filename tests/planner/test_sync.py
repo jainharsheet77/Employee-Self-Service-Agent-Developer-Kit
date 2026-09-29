@@ -415,6 +415,27 @@ def test_reexport_after_hydrate_does_not_duplicate_stream_carriers():
     assert sorted(e["value"] for e in carriers) == ["Authoring", "Workday"]
 
 
+def test_export_rejects_duplicate_streamed_title():
+    # A stream carrier joins back to its task by title (the local id isn't sent).
+    # Two tasks sharing a title would silently merge their grouping on pull, so a
+    # streamed task with a non-unique title is refused rather than corrupt the plan.
+    plan = Plan.new(objective="Stand up ESS on Workday")
+    plan.set_configuring_agent_name(HR_AGENT)
+    plan.add_task(new_task("t1", "Configure Workday", stream="Workday",
+                           assigned_to=principal_pool("WorkdayAdmin")))
+    plan.add_task(new_task("t2", "Configure Workday"))  # same title, poisons the carrier
+    with pytest.raises(ValueError, match="distinct titles"):
+        sync.to_remote_plan_body(plan)
+
+
+def test_export_accepts_legacy_cea_agent_name():
+    # A new plan only ever chooses a declarative-agent bundle, but a shared plan
+    # authored earlier that already names a custom-engine-agent must keep exporting.
+    plan = _plan()
+    body = sync.to_remote_plan_body(plan, configuring_agent_name="EmployeeSelfServiceHRCEA")
+    assert body["configuringAgentName"] == "EmployeeSelfServiceHRCEA"
+
+
 def test_stamp_remote_ids():
     plan = _plan()
     sync.stamp_remote_ids(plan, project_id="proj-x", plan_id="plan-x", plan_etag="W/7")
@@ -433,6 +454,15 @@ def test_cli_set_agent_name(tmp_path):
     _run("--plan", plan_path, "init")
     assert _run("--plan", plan_path, "set-agent-name", "--name", HR_AGENT) == 0
     assert Plan.load(plan_path).configuring_agent_name == HR_AGENT
+
+
+def test_cli_set_agent_name_rejects_cea_choice(tmp_path):
+    # The ESS agent ships as a declarative agent, so a new plan is only offered the
+    # DA names — the CLI refuses a custom-engine-agent bundle at the choice boundary.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    with pytest.raises(SystemExit):
+        _run("--plan", plan_path, "set-agent-name", "--name", "EmployeeSelfServiceHRCEA")
 
 
 def test_cli_export_remote_plan(tmp_path, capsys):

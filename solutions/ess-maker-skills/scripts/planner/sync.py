@@ -53,9 +53,13 @@ from planner.plan_model import (
 
 # The service task schema has no ``stream`` field, so ``to_remote_plan_body``
 # round-trips each streamed task's label as a Context entry under ``STREAM_GROUP``,
-# keyed by ``"<prefix><task title>"``. ``hydrate_from_remote`` reattaches it to the
-# task by title and drops the carrier entry, so the grouped task view survives a
-# publish/pull cycle without leaking an internal group into the local plan.
+# keyed by ``"<prefix><task title>"``. The title is the join key because the service
+# reassigns task ids on push (``to_remote_task_body`` drops the local id), so the
+# title is the only task identity that survives the round-trip; ``to_remote_plan_body``
+# refuses to export when a streamed task's title is not unique, so the carrier can't
+# silently spill one task's stream onto a namesake. ``hydrate_from_remote`` reattaches
+# it to the task by title and drops the carrier entry, so the grouped task view
+# survives a publish/pull cycle without leaking an internal group into the local plan.
 _STREAM_KEY_PREFIX = "stream:"
 
 # The service's PlanTaskState enum, in declaration order (so an integer wire
@@ -219,15 +223,34 @@ def to_remote_plan_body(
     # Carry each task's local-only ``stream`` label through the service as Context
     # (the task schema has no field for it) so the grouped task view is preserved
     # after a publish/pull round-trip. Reattached and stripped by import.
+    #
+    # The carrier joins back to its task by title (the local id isn't sent — the
+    # service assigns its own), and titles are not required to be unique. A streamed
+    # task sharing a title with another task would collide on one carrier and
+    # silently regroup on pull, so refuse to export that rather than corrupt the
+    # plan — the maker gives the tasks distinct titles first.
+    title_counts: dict[str, int] = {}
+    for task in plan.tasks:
+        title = (task.get("title") or "").strip()
+        if title:
+            title_counts[title] = title_counts.get(title, 0) + 1
     for task in plan.tasks:
         stream = (task.get("stream") or "").strip()
         title = (task.get("title") or "").strip()
-        if stream and title:
-            context.append({
-                "key": f"{_STREAM_KEY_PREFIX}{title}",
-                "value": stream,
-                "group": STREAM_GROUP,
-            })
+        if not stream or not title:
+            continue
+        if title_counts[title] > 1:
+            raise ValueError(
+                f"cannot export plan: task title {title!r} is shared by "
+                f"{title_counts[title]} tasks but carries a workstream label that "
+                "round-trips by title; give these tasks distinct titles before "
+                "pushing so their grouping can't be silently merged"
+            )
+        context.append({
+            "key": f"{_STREAM_KEY_PREFIX}{title}",
+            "value": stream,
+            "group": STREAM_GROUP,
+        })
 
     body: dict[str, Any] = {"configuringAgentName": name}
     if acceptance:

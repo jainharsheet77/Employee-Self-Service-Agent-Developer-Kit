@@ -71,11 +71,24 @@ ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "A
 PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
 # The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
 # Required on the create body, so a plan must name one before it can be pushed.
-# The ESS agent ships as a **declarative agent (DA)** — that's what merges to
-# `main` — so the custom-engine-agent (CEA) variants are intentionally not
-# offered: a plan never asks the sponsor to choose DA vs CEA, it's always DA.
-# HR vs IT is the only axis the sponsor still picks.
+#
+# CONFIGURING_AGENT_NAMES is the full set the service accepts and is used only for
+# *validation*. It intentionally still includes the custom-engine-agent (CEA)
+# bundles so a shared plan authored earlier — or by another tool — that already
+# names a CEA agent keeps validating and re-exporting; dropping a server-valid
+# value here would reject those existing plans on their next mutation or push.
 CONFIGURING_AGENT_NAMES = (
+    "EmployeeSelfServiceHRCEA",
+    "EmployeeSelfServiceHRDA",
+    "EmployeeSelfServiceITCEA",
+    "EmployeeSelfServiceITDA",
+)
+# What a **new** plan is allowed to choose. The ESS agent ships as a declarative
+# agent (DA) — that's what merges to `main` — so the CEA variants are not offered:
+# a new plan never asks the sponsor to choose DA vs CEA, it's always DA. HR vs IT
+# is the only axis the sponsor still picks. Offered by the CLI; validation stays on
+# the wider CONFIGURING_AGENT_NAMES above so existing CEA plans keep working.
+CONFIGURING_AGENT_CHOICES = (
     "EmployeeSelfServiceHRDA",
     "EmployeeSelfServiceITDA",
 )
@@ -1296,6 +1309,28 @@ class Plan:
                 "slot": "acceptanceCriteria",
                 "prompt": "How will you know a scenario is done — pilot-ready? production-signed-off?",
             })
+
+        # Uploaded task owners that didn't map to a recognized attestable role are
+        # recorded under UNMAPPED_ROLE_GROUP during ingest. Surface each as a
+        # required gap — but only while the task still has no owner — so an
+        # otherwise-complete upload with an unrecognized role can't report "nothing
+        # missing" and skip asking who owns that task. Once the task is assigned
+        # (a person was named, or the interview picks an owner) the gap clears, so
+        # the ask-only-what's-missing loop converges.
+        for entry in self._context_group(UNMAPPED_ROLE_GROUP):
+            key = str(entry.get("key") or "")
+            tid = key.split(".", 1)[1] if "." in key else ""
+            task = next(
+                (t for t in self.tasks if str(t.get("id") or "") == tid), None
+            ) if tid else None
+            if task is None or (task.get("assignedTo") or {}):
+                continue
+            role_label = str(entry.get("value") or "").strip()
+            prompt = str(entry.get("description") or "").strip() or (
+                f"The uploaded owner {role_label!r} isn't a recognized role — "
+                "who should own this task?"
+            )
+            required.append({"slot": key or "task-role", "prompt": prompt})
 
         return {"required": required, "recommended": recommended}
 

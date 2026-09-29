@@ -38,7 +38,7 @@ from planner import research, setup_tasks
 from planner.capture import detect_config_artifacts, snapshot_config
 from planner.plan_model import (
     ARTIFACT_KINDS,
-    CONFIGURING_AGENT_NAMES,
+    CONFIGURING_AGENT_CHOICES,
     PLAN_PATH,
     SCENARIO_GROUP,
     SUMMARY_FILENAME,
@@ -858,12 +858,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("set-agent-name",
                        help="name the ESS agent this plan configures (required before a sync push)")
-    p.add_argument("--name", required=True, choices=list(CONFIGURING_AGENT_NAMES))
+    p.add_argument("--name", required=True, choices=list(CONFIGURING_AGENT_CHOICES))
     p.set_defaults(func=cmd_set_agent_name)
 
     p = sub.add_parser("export-remote-plan",
                        help="print the single create body for pushing this plan (JSON)")
-    p.add_argument("--agent-name", dest="agent_name", choices=list(CONFIGURING_AGENT_NAMES),
+    p.add_argument("--agent-name", dest="agent_name", choices=list(CONFIGURING_AGENT_CHOICES),
                    help="override the plan's configuringAgentName for this export")
     p.set_defaults(func=cmd_export_remote_plan)
 
