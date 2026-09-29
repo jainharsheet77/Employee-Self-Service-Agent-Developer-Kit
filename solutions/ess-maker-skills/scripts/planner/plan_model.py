@@ -42,6 +42,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .attestable import resolve_attestable_role_id
+
 SCHEMA_VERSION = 1
 
 # Default on-disk locations (relative to the kit root — the cwd the skill runs
@@ -69,10 +71,25 @@ ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "A
 PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
 # The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
 # Required on the create body, so a plan must name one before it can be pushed.
+#
+# CONFIGURING_AGENT_NAMES is the full set the service accepts and is used only for
+# *validation*. It intentionally still includes the custom-engine-agent (CEA)
+# bundles so a shared plan authored earlier — or by another tool — that already
+# names a CEA agent keeps validating and re-exporting; dropping a server-valid
+# value here would reject those existing plans on their next mutation or push.
 CONFIGURING_AGENT_NAMES = (
     "EmployeeSelfServiceHRCEA",
     "EmployeeSelfServiceHRDA",
     "EmployeeSelfServiceITCEA",
+    "EmployeeSelfServiceITDA",
+)
+# What a **new** plan is allowed to choose. The ESS agent ships as a declarative
+# agent (DA) — that's what merges to `main` — so the CEA variants are not offered:
+# a new plan never asks the sponsor to choose DA vs CEA, it's always DA. HR vs IT
+# is the only axis the sponsor still picks. Offered by the CLI; validation stays on
+# the wider CONFIGURING_AGENT_NAMES above so existing CEA plans keep working.
+CONFIGURING_AGENT_CHOICES = (
+    "EmployeeSelfServiceHRDA",
     "EmployeeSelfServiceITDA",
 )
 # The ledger key the /setup task produces and downstream tasks consume — the
@@ -105,6 +122,20 @@ SCENARIO_CONTEXT_GROUP = "scenarioContext"
 CAPABILITY_GROUP = "scenarioCapability"
 SYSTEM_GROUP = "system"
 
+# A per-task workstream label (``task["stream"]``) is a local-only rendering hint,
+# but the service task schema has no field for it. So the sync seam round-trips it
+# as plan Context under this group — written on export, reattached to tasks and
+# stripped from Context on import — keeping the grouped task view stable across a
+# publish/pull cycle. Never surfaced to the maker (see ``_STRUCTURED_GROUPS``).
+STREAM_GROUP = "taskStream"
+
+# A maker-uploaded task owner that doesn't resolve to a closed attestable role is
+# kept here (not on the assignment, which the service would reject on publish) so
+# the interview can confirm the real owner instead of silently dropping the intent.
+# Deliberately NOT in ``_STRUCTURED_GROUPS`` — it surfaces under "More context".
+UNMAPPED_ROLE_GROUP = "unmappedRole"
+
+
 # Groups the readable Markdown sections already consume; anything else falls
 # through to the generic "More context" block (keeps the view lossless).
 _STRUCTURED_GROUPS = frozenset(
@@ -118,6 +149,7 @@ _STRUCTURED_GROUPS = frozenset(
         CAPABILITY_GROUP,
         SYSTEM_GROUP,
         DEPENDS_ON_GROUP,
+        STREAM_GROUP,
     }
 )
 
@@ -259,6 +291,7 @@ def new_task(
     title: str,
     *,
     description: str = "",
+    stream: str = "",
     assigned_to: dict[str, Any] | None = None,
     produces: Iterable[str] | None = None,
     consumes: Iterable[str] | None = None,
@@ -274,6 +307,8 @@ def new_task(
         "produces": list(produces or []),
         "consumes": list(consumes or []),
     }
+    if stream:
+        task["stream"] = stream
     if checklist:
         task["checklist"] = list(checklist)
     return task
@@ -339,6 +374,42 @@ def humanize(token: str) -> str:
         else:
             words.append(low)
     return " ".join(words)
+
+
+def slugify(text: str) -> str:
+    """Turn free text into a stable, lowercase slug usable as a Context key part
+    (e.g. ``"Create HR ticket"`` -> ``"create-hr-ticket"``). Runs of
+    non-alphanumeric characters collapse to a single dash and leading/trailing
+    dashes are trimmed; empty or symbol-only input yields ``""``."""
+    return re.sub(r"[^a-z0-9]+", "-", str(text).strip().lower()).strip("-")
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Coerce a scalar / list / ``None`` into a list — a maker-authored upload
+    may give one value where the model expects many (one goal, one scenario)."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _as_area_pairs(value: Any) -> list[tuple[str, str]]:
+    """Read a top-level ``systems`` block from an uploaded plan as
+    ``[(area, system), ...]``. Accepts a mapping (``{area: system}``) or a list
+    of ``{area|scenario|id, system|name}`` objects; anything else yields ``[]``."""
+    pairs: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for area, system in value.items():
+            pairs.append((str(area).strip(), str(system).strip()))
+    elif isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            area = item.get("area") or item.get("scenario") or item.get("id") or ""
+            system = item.get("system") or item.get("name") or ""
+            pairs.append((str(area).strip(), str(system).strip()))
+    return pairs
 
 
 # Keys under which an (agent-authored, free-form) research corpus may list its
@@ -983,6 +1054,286 @@ class Plan:
                 seen.add(pair)
         return unmet
 
+    # ---- uploaded-plan ingestion & gap analysis ------------------------- #
+
+    def ingest_upload(self, payload: dict[str, Any], *, source: str = "User") -> dict[str, int]:
+        """Populate this (fresh) plan from a maker-authored **uploaded** plan.
+
+        The ``/planner`` skill reads a plan the maker attached — in whatever
+        shape they wrote it — makes sense of it (mapping its scenarios to the
+        ESS catalogue categories), and hands the normalized result here so the
+        structured write stays atomic and validated, exactly like the interview
+        path. Only the fields the upload actually carried are written; whatever
+        is absent is reported by :meth:`missing_slots` for the skill to ask
+        about. Everything parsed out of the uploaded file is untrusted **data**,
+        so every value lands as an ordinary Context entry — never as an
+        instruction.
+
+        The accepted payload (all keys optional)::
+
+            {
+              "objective": str,
+              "market": str,
+              "persona": str,
+              "jtbd": str | [str],
+              "businessGoals": str | [str],
+              "acceptanceCriteria": str | [str],
+              "systems": {area: system} | [{area, system}],
+              "scenarios": [
+                {"id": str, "label"?: str, "system"?: str, "capabilities"?: [str]}
+              ],
+              "scenarioDependencies": [
+                {"scenario": str, "dependsOn": str, "kind"?: str, "rationale"?: str}
+              ],
+              "tasks": [
+                {"id": str, "title": str, "description"?: str, "stream"?: str,
+                 "role"?: str, "person"?: str, "produces"?: [str], "consumes"?: [str]}
+              ]
+            }
+
+        Returns a count of what was ingested (for the skill's read-back). Raises
+        ``ValueError`` on a malformed entry (a scenario/task with no id) so a bad
+        parse fails loudly instead of persisting a half-built plan. A task ``role``
+        is mapped to its canonical attestable id; an unrecognized one is left off
+        the assignment and recorded under ``UNMAPPED_ROLE_GROUP`` (a gap to confirm,
+        never a role the shared planner would reject on publish).
+        """
+        counts = {
+            "objective": 0, "market": 0, "persona": 0, "jtbd": 0,
+            "businessGoals": 0, "acceptanceCriteria": 0,
+            "scenarios": 0, "systems": 0, "capabilities": 0,
+            "scenarioDependencies": 0, "tasks": 0,
+        }
+
+        def clean(value: Any) -> str:
+            return str(value).strip() if value is not None else ""
+
+        if clean(payload.get("objective")):
+            self.set_context(
+                "objective", clean(payload["objective"]), group=OBJECTIVE_GROUP,
+                description="Plain-language goal from the uploaded plan", source=source,
+            )
+            counts["objective"] = 1
+
+        if clean(payload.get("market")):
+            self.set_context(
+                "market", clean(payload["market"]), group=MARKET_GROUP,
+                description="Rollout market/wave from the uploaded plan", source=source,
+            )
+            counts["market"] = 1
+
+        if clean(payload.get("persona")):
+            self.set_context(
+                "persona", clean(payload["persona"]), group=SCENARIO_CONTEXT_GROUP,
+                description="Audience from the uploaded plan", source=source,
+            )
+            counts["persona"] = 1
+
+        jtbd_text = "; ".join(clean(x) for x in _as_list(payload.get("jtbd")) if clean(x))
+        if jtbd_text:
+            self.set_context(
+                "jtbd", jtbd_text, group=SCENARIO_CONTEXT_GROUP,
+                description="Jobs-to-be-done from the uploaded plan", source=source,
+            )
+            counts["jtbd"] = 1
+
+        for i, goal in enumerate(_as_list(payload.get("businessGoals")), start=1):
+            if clean(goal):
+                self.set_context(
+                    f"businessGoal-{i}", clean(goal), group=BUSINESS_GOALS_GROUP,
+                    description="Business goal from the uploaded plan", source=source,
+                )
+                counts["businessGoals"] += 1
+
+        for i, crit in enumerate(_as_list(payload.get("acceptanceCriteria")), start=1):
+            if clean(crit):
+                self.set_context(
+                    f"criterion-{i}", clean(crit), group=ACCEPTANCE_GROUP,
+                    description="Definition of done from the uploaded plan", source=source,
+                )
+                counts["acceptanceCriteria"] += 1
+
+        # Systems the upload listed on their own (not attached to a scenario).
+        for area, system in _as_area_pairs(payload.get("systems")):
+            if area and system:
+                self.set_system(area, system, source=source)
+                counts["systems"] += 1
+
+        for scn in _as_list(payload.get("scenarios")):
+            if isinstance(scn, str):
+                scn = {"id": scn}
+            if not isinstance(scn, dict):
+                raise ValueError(f"uploaded scenario must be an object or id string: {scn!r}")
+            sid = clean(scn.get("id") or scn.get("slug"))
+            if not sid:
+                raise ValueError(f"uploaded scenario is missing an id: {scn!r}")
+            label = clean(scn.get("label") or scn.get("name")) or humanize(sid)
+            self.set_context(
+                sid, label, group=SCENARIO_GROUP,
+                description="Scenario in scope (uploaded plan)", source=source,
+            )
+            counts["scenarios"] += 1
+            if clean(scn.get("system")):
+                self.set_system(sid, clean(scn["system"]), source=source)
+                counts["systems"] += 1
+            for cap in _as_list(scn.get("capabilities")):
+                cap_text = clean(cap)
+                if not cap_text:
+                    continue
+                slug = slugify(cap_text) or f"cap-{counts['capabilities'] + 1}"
+                self.set_context(
+                    f"{sid}.{slug}", cap_text, group=CAPABILITY_GROUP,
+                    description="Enabled scenario from the uploaded plan", source=source,
+                )
+                counts["capabilities"] += 1
+
+        for dep in _as_list(payload.get("scenarioDependencies")):
+            if not isinstance(dep, dict):
+                raise ValueError(f"uploaded scenario dependency must be an object: {dep!r}")
+            scenario = clean(dep.get("scenario"))
+            depends_on = clean(dep.get("dependsOn") or dep.get("depends_on"))
+            if not scenario or not depends_on:
+                raise ValueError(f"uploaded scenario dependency malformed (need scenario + dependsOn): {dep!r}")
+            self.add_scenario_dependency(
+                scenario, depends_on,
+                kind=clean(dep.get("kind")) or "requires",
+                rationale=clean(dep.get("rationale")) or "From the uploaded plan",
+                source=source,
+            )
+            counts["scenarioDependencies"] += 1
+
+        for tsk in _as_list(payload.get("tasks")):
+            if not isinstance(tsk, dict):
+                raise ValueError(f"uploaded task must be an object: {tsk!r}")
+            tid = clean(tsk.get("id"))
+            title = clean(tsk.get("title"))
+            if not tid or not title:
+                raise ValueError(f"uploaded task needs both an id and a title: {tsk!r}")
+            role = clean(tsk.get("role"))
+            person = clean(tsk.get("person"))
+            # The shared planner only pools/attests tasks against the closed
+            # attestable-role set, so map the uploaded label to its canonical
+            # compact id. A non-attestable label (e.g. "Power Platform Admin") is
+            # NOT attached — it would fail on publish — but it's recorded as a gap
+            # so the interview can confirm the real owner rather than lose the intent.
+            role_id = resolve_attestable_role_id(role) if role else None
+            if role and role_id is None:
+                self.set_context(
+                    f"task-role.{tid}", role, group=UNMAPPED_ROLE_GROUP,
+                    description=(
+                        f"Uploaded owner for task '{title}' ({role!r}) isn't a "
+                        "recognized attestable role — confirm who owns it"
+                    ),
+                    source=source,
+                )
+            assigned: dict[str, Any] | None = None
+            if person:
+                assigned = principal_person(person, role_id=role_id or None)
+            elif role_id:
+                assigned = principal_pool(role_id)
+            self.add_task(
+                new_task(
+                    tid, title,
+                    description=clean(tsk.get("description")),
+                    stream=clean(tsk.get("stream")),
+                    assigned_to=assigned,
+                    produces=[clean(x) for x in _as_list(tsk.get("produces")) if clean(x)],
+                    consumes=[clean(x) for x in _as_list(tsk.get("consumes")) if clean(x)],
+                )
+            )
+            counts["tasks"] += 1
+
+        return counts
+
+    def missing_slots(self) -> dict[str, list[dict[str, str]]]:
+        """The intent slots the plan still lacks — the questions the skill should
+        ask after an upload (or an under-specified interview), and nothing it has
+        already captured.
+
+        ``required`` blocks Phase 3 — objective, at least one scenario, and a
+        backing system for **every** in-scope scenario (interview.md's mandatory
+        set). ``recommended`` sharpens the plan but never blocks: audience,
+        market, business goals, definition of done, and the per-scenario enabled
+        capabilities the eval reads off the plan. Each gap carries a ready-to-ask
+        ``prompt``. Pure/read-only — re-running after the skill fills a slot
+        simply returns fewer gaps, so it drives an "ask only what's missing,
+        then re-check" loop.
+        """
+        required: list[dict[str, str]] = []
+        recommended: list[dict[str, str]] = []
+
+        if not str(self.output_value_or_context("objective") or "").strip():
+            required.append({
+                "slot": "objective",
+                "prompt": "In one sentence — what should this agent do, and for whom?",
+            })
+
+        scenarios = self.in_scope_scenarios()
+        if not scenarios:
+            required.append({
+                "slot": "scenarios",
+                "prompt": "What should your team be able to self-serve? Think in outcomes, not systems.",
+            })
+        else:
+            systems = self._systems_by_area()
+            for sid, label in scenarios.items():
+                name = label or sid
+                if self._system_for_scenario(sid, systems) is None:
+                    required.append({
+                        "slot": f"system:{sid}",
+                        "prompt": f"For {name}, which system holds the data (e.g. Workday, ServiceNow, SharePoint)?",
+                    })
+                if not self._capabilities_for(sid):
+                    recommended.append({
+                        "slot": f"capabilities:{sid}",
+                        "prompt": f"Which named scenarios should {name} enable (e.g. create ticket, read cases)?",
+                    })
+
+        if self._first_value(SCENARIO_CONTEXT_GROUP, "persona") is None:
+            recommended.append({
+                "slot": "persona",
+                "prompt": "Employees only, or managers too?",
+            })
+        if self._first_value(MARKET_GROUP) is None:
+            recommended.append({
+                "slot": "market",
+                "prompt": "Rolling out to a specific market or wave first (e.g. India, a pilot group)?",
+            })
+        if not self._context_group(BUSINESS_GOALS_GROUP):
+            recommended.append({
+                "slot": "businessGoals",
+                "prompt": "What business outcome measures success (e.g. deflect 30% of HR tickets)?",
+            })
+        if not self._context_group(ACCEPTANCE_GROUP):
+            recommended.append({
+                "slot": "acceptanceCriteria",
+                "prompt": "How will you know a scenario is done — pilot-ready? production-signed-off?",
+            })
+
+        # Uploaded task owners that didn't map to a recognized attestable role are
+        # recorded under UNMAPPED_ROLE_GROUP during ingest. Surface each as a
+        # required gap — but only while the task still has no owner — so an
+        # otherwise-complete upload with an unrecognized role can't report "nothing
+        # missing" and skip asking who owns that task. Once the task is assigned
+        # (a person was named, or the interview picks an owner) the gap clears, so
+        # the ask-only-what's-missing loop converges.
+        for entry in self._context_group(UNMAPPED_ROLE_GROUP):
+            key = str(entry.get("key") or "")
+            tid = key.split(".", 1)[1] if "." in key else ""
+            task = next(
+                (t for t in self.tasks if str(t.get("id") or "") == tid), None
+            ) if tid else None
+            if task is None or (task.get("assignedTo") or {}):
+                continue
+            role_label = str(entry.get("value") or "").strip()
+            prompt = str(entry.get("description") or "").strip() or (
+                f"The uploaded owner {role_label!r} isn't a recognized role — "
+                "who should own this task?"
+            )
+            required.append({"slot": key or "task-role", "prompt": prompt})
+
+        return {"required": required, "recommended": recommended}
+
     # ---- Flow 2: discovery ---------------------------------------------- #
 
     def tasks_for_person(
@@ -1390,18 +1741,71 @@ class Plan:
         # (shown in task-brief), keeping the table scannable.
         lines.append("## Tasks")
         lines.append("")
-        if self.tasks:
-            lines.append("| # | Task | Role / owner | State | Blocked by |")
-            lines.append("|---|------|--------------|-------|------------|")
-            for task in self.ordered_tasks():
-                marker = self.dependency_marker(task.get("id")) or "—"
-                lines.append(
-                    f"| {task.get('id')} | {task.get('title')} | "
-                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
-                )
-        else:
+        if not self.tasks:
             lines.append("_No tasks yet._")
-        lines.append("")
+            lines.append("")
+            return
+        ordered = self.ordered_tasks()
+        # Group under a stream/theme heading when tasks carry one (e.g. "Workday",
+        # "Setup", "Authoring") so the sponsor reads the plan by workstream; the
+        # per-task State cell still shows the cross-stream sequencing (a task whose
+        # consumed artifacts aren't produced yet reads as "🔒 Not started").
+        # Streams are ordered by the earliest execution position of any task in
+        # them, and tasks keep execution order within a stream. A plan whose tasks
+        # carry no stream renders as a single flat table (unchanged).
+        if any((t.get("stream") or "").strip() for t in ordered):
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            stream_order: list[str] = []
+            for task in ordered:
+                label = (task.get("stream") or "").strip() or "Other"
+                if label not in buckets:
+                    buckets[label] = []
+                    stream_order.append(label)
+                buckets[label].append(task)
+            for label in stream_order:
+                lines.append(f"### {label}")
+                lines.append("")
+                self._render_task_table(lines, buckets[label])
+                lines.append("")
+        else:
+            self._render_task_table(lines, ordered)
+            lines.append("")
+
+    def _render_task_table(self, lines: list[str], tasks: list[dict[str, Any]]) -> None:
+        # Design-aligned columns: a plain Step number (internal task ids stay
+        # hidden from the sponsor), the task, its role/owner, and a State cell
+        # whose icon carries the dependency signal — ✅ Complete / In progress /
+        # 🔒 Not started (locked while an upstream task still owes a consumed
+        # artifact) / Not started (ready) / 🔒 Blocked. The lock replaces the old
+        # numeric "Blocked by T#" column so dependent tasks read the way the UX
+        # intends: you see *that* a task is gated without leaking task ids.
+        lines.append("| Step | Task | Role / owner | State |")
+        lines.append("|------|------|--------------|-------|")
+        for step, task in enumerate(tasks, start=1):
+            lines.append(
+                f"| {step} | {task.get('title')} | "
+                f"{_render_assignee(task.get('assignedTo'))} | "
+                f"{self._task_state_label(task)} |"
+            )
+
+    def _task_state_label(self, task: dict[str, Any]) -> str:
+        """The design's State cell, one icon per state. ``✅ Complete`` /
+        ``🔄 In progress`` / ``🔒 Blocked`` map the stored state directly; a
+        ``NotStarted`` task reads as ``🔒 Not started`` while it still
+        :meth:`waiting_on` an upstream artifact (the render-time dependency lock)
+        and ``⬜ Not started`` once it's ready to pick up. Pure/read-only —
+        reflects the current produces/consumes ledger, never mutates it or the
+        stored task state."""
+        state = task.get("state") or "NotStarted"
+        if state == "Completed":
+            return "✅ Complete"
+        if state == "InProgress":
+            return "🔄 In progress"
+        if state == "Blocked":
+            return "🔒 Blocked"
+        if self.waiting_on(task.get("id")):
+            return "🔒 Not started"
+        return "⬜ Not started"
 
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]

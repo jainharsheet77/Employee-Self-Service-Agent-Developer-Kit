@@ -17,13 +17,14 @@ import pytest
 from planner import cli, sync
 from planner.plan_model import (
     ACCEPTANCE_GROUP,
+    STREAM_GROUP,
     Plan,
     new_task,
     principal_person,
     principal_pool,
 )
 
-HR_AGENT = "EmployeeSelfServiceHRCEA"
+HR_AGENT = "EmployeeSelfServiceHRDA"
 PAUL = "00000000-0000-0000-0000-0000000000b1"
 
 
@@ -355,6 +356,86 @@ def test_export_then_hydrate_preserves_core():
     assert Plan(data).validate() == []
 
 
+def _streamed_plan() -> Plan:
+    plan = Plan.new(objective="Stand up ESS on Workday")
+    plan.set_configuring_agent_name(HR_AGENT)
+    plan.add_task(
+        new_task("t1", "Configure Workday", stream="Workday",
+                 assigned_to=principal_pool("WorkdayAdmin"))
+    )
+    plan.add_task(new_task("t2", "Author HR topic", stream="Authoring"))
+    plan.add_task(new_task("t3", "No stream task"))
+    return plan
+
+
+def test_export_carries_task_stream_as_context():
+    body = sync.to_remote_plan_body(_streamed_plan())
+    # Top-level shape is unchanged (stream rides inside the allowed context field).
+    assert set(body) <= {"configuringAgentName", "acceptanceCriteria", "context", "tasks"}
+    carriers = {e["key"]: e["value"] for e in body["context"] if e.get("group") == STREAM_GROUP}
+    assert carriers == {"stream:Configure Workday": "Workday", "stream:Author HR topic": "Authoring"}
+    # Tasks with no stream contribute no carrier.
+    assert "stream:No stream task" not in carriers
+
+
+def test_export_then_hydrate_preserves_task_stream():
+    plan = _streamed_plan()
+    body = sync.to_remote_plan_body(plan)
+    echoed_tasks = []
+    for index, task_body in enumerate(body["tasks"], start=1):
+        echoed = dict(task_body)
+        echoed["taskId"] = f"srv-{index}"
+        echoed_tasks.append(echoed)
+    plan_entity = {
+        "planId": "srv-plan",
+        "configuringAgentName": body["configuringAgentName"],
+        "status": "Draft",
+        "context": body["context"],
+    }
+    data = sync.hydrate_from_remote(plan_entity, {"value": echoed_tasks})
+
+    streams = {t["title"]: t.get("stream", "") for t in data["tasks"]}
+    assert streams == {"Configure Workday": "Workday", "Author HR topic": "Authoring", "No stream task": ""}
+    # The carrier group is an internal vehicle — it never lands in local context.
+    assert all(e.get("group") != STREAM_GROUP for e in data["context"])
+    assert Plan(data).validate() == []
+
+
+def test_reexport_after_hydrate_does_not_duplicate_stream_carriers():
+    body = sync.to_remote_plan_body(_streamed_plan())
+    echoed_tasks = [dict(tb, taskId=f"srv-{i}") for i, tb in enumerate(body["tasks"], start=1)]
+    data = sync.hydrate_from_remote(
+        {"configuringAgentName": body["configuringAgentName"], "status": "Draft",
+         "context": body["context"]},
+        {"value": echoed_tasks},
+    )
+    reexported = sync.to_remote_plan_body(Plan(data))
+    carriers = [e for e in reexported["context"] if e.get("group") == STREAM_GROUP]
+    # Re-derived from the tasks, not echoed from context — so still exactly two.
+    assert sorted(e["value"] for e in carriers) == ["Authoring", "Workday"]
+
+
+def test_export_rejects_duplicate_streamed_title():
+    # A stream carrier joins back to its task by title (the local id isn't sent).
+    # Two tasks sharing a title would silently merge their grouping on pull, so a
+    # streamed task with a non-unique title is refused rather than corrupt the plan.
+    plan = Plan.new(objective="Stand up ESS on Workday")
+    plan.set_configuring_agent_name(HR_AGENT)
+    plan.add_task(new_task("t1", "Configure Workday", stream="Workday",
+                           assigned_to=principal_pool("WorkdayAdmin")))
+    plan.add_task(new_task("t2", "Configure Workday"))  # same title, poisons the carrier
+    with pytest.raises(ValueError, match="distinct titles"):
+        sync.to_remote_plan_body(plan)
+
+
+def test_export_accepts_legacy_cea_agent_name():
+    # A new plan only ever chooses a declarative-agent bundle, but a shared plan
+    # authored earlier that already names a custom-engine-agent must keep exporting.
+    plan = _plan()
+    body = sync.to_remote_plan_body(plan, configuring_agent_name="EmployeeSelfServiceHRCEA")
+    assert body["configuringAgentName"] == "EmployeeSelfServiceHRCEA"
+
+
 def test_stamp_remote_ids():
     plan = _plan()
     sync.stamp_remote_ids(plan, project_id="proj-x", plan_id="plan-x", plan_etag="W/7")
@@ -373,6 +454,15 @@ def test_cli_set_agent_name(tmp_path):
     _run("--plan", plan_path, "init")
     assert _run("--plan", plan_path, "set-agent-name", "--name", HR_AGENT) == 0
     assert Plan.load(plan_path).configuring_agent_name == HR_AGENT
+
+
+def test_cli_set_agent_name_rejects_cea_choice(tmp_path):
+    # The ESS agent ships as a declarative agent, so a new plan is only offered the
+    # DA names — the CLI refuses a custom-engine-agent bundle at the choice boundary.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    with pytest.raises(SystemExit):
+        _run("--plan", plan_path, "set-agent-name", "--name", "EmployeeSelfServiceHRCEA")
 
 
 def test_cli_export_remote_plan(tmp_path, capsys):

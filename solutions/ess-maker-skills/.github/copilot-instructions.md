@@ -3,10 +3,15 @@
 ## MANDATORY FIRST ACTION — Do This Before Anything Else
 
 **YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to try to read `.local/setup/config.json` and `.local/config.json`.**
+reading tool to try to read `.local/setup/config.json`, `.local/config.json`,
+and `workspace/plan/plan.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read both files FIRST, then decide what
-to do based on the result.
+the user first. Do NOT list capabilities. Read all three FIRST, then decide what
+to do based on the result — including whether a plan is already in progress (see
+the plan-in-progress exception below). Do the reads and this routing decision
+**silently, in one pass** — do not narrate them ("config missing", "setup not
+ready", "starting setup", "loading instructions"). The maker's first visible
+output is the welcome message, the resumed plan, or the skill you route to.
 
 ### If foundation setup is missing or not ready
 
@@ -24,16 +29,33 @@ Respond with ONLY this exact message and nothing else:
 > your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
 > just say **"set up ESS"**. It only takes a couple minutes.
 
-**The exceptions**: If the user typed `/setup` or explicitly asked to run
-setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
-If the user typed `/planner` or asked to **plan a rollout / plan an ESS
-deployment / set up ESS for the first time / where do I start / how do I get
-started / "what am I assigned?"**, proceed with planning — read
-`src/skills/planner/SKILL.md` and follow it (the planner is the one experience
-that is allowed to run before setup, because planning is how a greenfield
-deployment is decided). A first-time / "where do I start" request is a
-**planning** request — route it to the planner, which then emits "run `/setup`"
-as the first task; do **not** send it straight to `/setup`.
+**Plan already in progress — check this first.** If `workspace/plan/plan.json`
+exists, the maker already started an ESS plan (via `/planner` or the setup
+choice), so do **not** show the welcome message and do **not** block on setup.
+Read `src/skills/planner/SKILL.md` and resume their plan — it pulls the latest
+state and shows what they can pick up next. The plan already carries the "run
+`/setup`" task for when an environment is actually needed. The only override: if
+the maker explicitly asks to run setup or connect now (`/setup`, "set up ESS",
+`/connect`), honor that instead.
+
+**The exceptions**: If the user typed `/setup` or explicitly asked to run setup
+(including "set up ESS" / "set up ESS for the first time"), proceed with setup —
+read `src/skills/foundation-setup/SKILL.md` and follow it. On a genuine first run
+that skill asks whether the maker wants to **plan the rollout** or **set up the
+environment now**, and hands off to the planner itself when they choose planning.
+
+If the user typed `/planner` or made an **explicit planning request** — "plan a
+rollout", "plan my ESS deployment", "create a plan", "scenario plan", or "what am
+I assigned?" — proceed with planning: read `src/skills/planner/SKILL.md` and
+follow it (the planner is the one experience allowed to run before setup, because
+planning is how a greenfield deployment is decided).
+
+An **ambiguous, open-ended first-time request** — "I want to deploy ESS", "deploy
+ESS for my team", "where do I start", "how do I get started" — is **not** an
+explicit planning request. Do **not** send it straight to the planner: fall
+through to the welcome message below and ask the maker to run setup. The setup
+skill then offers the plan-vs-set-up choice and hands off to the planner if the
+maker picks planning.
 
 **This gate applies to ALL user messages** — including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
@@ -337,12 +359,15 @@ After a successful push, `.baseline/` is updated to match the new state.
 "integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
 "I want to connect to ServiceNow", "ServiceNow integration".
 
-**Trigger phrases for planner:** "plan a rollout", "plan my ESS deployment",
-"create a plan", "scenario plan", "set up ESS with Workday/ServiceNow",
-"I want to set up ESS for the first time", "where do I start", "where should I
-start", "how do I get started", "getting started with ESS", "set up ESS from
-scratch", "first-time setup", "what should I do first", "what am I assigned",
-"what are my tasks", "my tasks", "what's assigned to me".
+**Trigger phrases for planner (explicit planning intent):** "plan a rollout",
+"plan my ESS deployment", "create a plan", "scenario plan", "set up ESS with
+Workday/ServiceNow", "what am I assigned", "what are my tasks", "my tasks",
+"what's assigned to me". An **ambiguous first-time request** with no explicit
+"plan" intent — "where do I start", "how do I get started", "I want to deploy
+ESS", "set up ESS for the first time" — is **not** a direct planner trigger
+before setup: route it to setup, which offers the plan-vs-set-up choice and
+hands off to the planner if the maker picks planning (see the first-run gate at
+the top of this file).
 
 **Trigger phrases for roles:** "assign the ServiceNow admin role to <person>",
 "make <person> the Workday admin", "give <person> the <role> role", "who holds

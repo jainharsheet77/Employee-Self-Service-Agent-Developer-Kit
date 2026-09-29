@@ -87,16 +87,16 @@ already mirror.
 After you've built the plan locally through the phases (research → interview →
 model → assign), publish it in **one** create call rather than task-by-task:
 
-1. **Name the configuring agent.** Pick the enum that matches the agent the
-   sponsor is configuring and set it:
+1. **Confirm whether this plan targets HR or IT — the only agent axis left.**
+   The create body's `configuringAgentName` is required. The ESS agent ships as
+   a **declarative agent (DA)** — that's what merges to `main` — so there is **no
+   DA-vs-custom-engine choice to make**; every plan targets the DA. The only axis
+   the sponsor still picks is **HR vs IT**:
+   - `EmployeeSelfServiceHRDA` — HR
+   - `EmployeeSelfServiceITDA` — IT
+   HR-vs-IT is usually clear from the interview; confirm it in plain language
+   ("Is this for HR or IT?") rather than guessing. Only once confirmed, set it:
    `python scripts/planner/cli.py set-agent-name --name <AgentName>`
-   where `<AgentName>` is one of:
-   - `EmployeeSelfServiceHRCEA` — HR, custom engine agent
-   - `EmployeeSelfServiceHRDA` — HR, declarative agent
-   - `EmployeeSelfServiceITCEA` — IT, custom engine agent
-   - `EmployeeSelfServiceITDA` — IT, declarative agent
-   If it isn't obvious from the interview (HR vs IT, custom-engine vs
-   declarative), ask the sponsor in plain language ("Is this for HR or IT?").
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).
@@ -121,8 +121,11 @@ model → assign), publish it in **one** create call rather than task-by-task:
    to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
    the temp file. The plan is now cached as **Draft** with real ids.
 5. **Show the plan and ask the sponsor whether to activate it.** Present the plan
-   and offer the Markdown for them to **download and review** (the render is in
-   `src/skills/planner/SKILL.md`). The plan is already Draft with its assignees
+   and offer the Markdown for them to **download and review** — render its clickable
+   link in chat first (the `summary` command prints the exact
+   `📄 [ESS-scenario-plan.md](…)` line; emit it verbatim, above the body — see
+   *Building the plan* in `src/skills/planner/SKILL.md`). The plan is already Draft
+   with its assignees
    baked in, and a Draft's tasks are **read-only** until it's Active — so the
    real choice now is simply *when* to activate:
    - **Activate now** — the plan is ready to run; go to step 6. Activation makes

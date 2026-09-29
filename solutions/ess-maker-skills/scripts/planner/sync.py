@@ -39,6 +39,7 @@ from planner.plan_model import (
     CONFIGURING_AGENT_NAMES,
     PLAN_STATES,
     SCHEMA_VERSION,
+    STREAM_GROUP,
     Plan,
     assignee_role_id,
     assignee_user_oid,
@@ -49,6 +50,17 @@ from planner.plan_model import (
     principal_person,
     principal_pool,
 )
+
+# The service task schema has no ``stream`` field, so ``to_remote_plan_body``
+# round-trips each streamed task's label as a Context entry under ``STREAM_GROUP``,
+# keyed by ``"<prefix><task title>"``. The title is the join key because the service
+# reassigns task ids on push (``to_remote_task_body`` drops the local id), so the
+# title is the only task identity that survives the round-trip; ``to_remote_plan_body``
+# refuses to export when a streamed task's title is not unique, so the carrier can't
+# silently spill one task's stream onto a namesake. ``hydrate_from_remote`` reattaches
+# it to the task by title and drops the carrier entry, so the grouped task view
+# survives a publish/pull cycle without leaking an internal group into the local plan.
+_STREAM_KEY_PREFIX = "stream:"
 
 # The service's PlanTaskState enum, in declaration order (so an integer wire
 # value can be resolved positionally). Only ``Cancelled`` differs from the local
@@ -195,6 +207,10 @@ def to_remote_plan_body(
         if entry.get("group") == ACCEPTANCE_GROUP:
             acceptance.append(entry.get("value"))
             continue
+        # Stream carriers are re-derived from the tasks below, so never echo a
+        # stale one back (keeps the round-trip idempotent).
+        if entry.get("group") == STREAM_GROUP:
+            continue
         item: dict[str, Any] = {"key": entry.get("key"), "value": entry.get("value")}
         group = entry.get("group")
         if group:
@@ -203,6 +219,38 @@ def to_remote_plan_body(
         if description:
             item["description"] = description
         context.append(item)
+
+    # Carry each task's local-only ``stream`` label through the service as Context
+    # (the task schema has no field for it) so the grouped task view is preserved
+    # after a publish/pull round-trip. Reattached and stripped by import.
+    #
+    # The carrier joins back to its task by title (the local id isn't sent — the
+    # service assigns its own), and titles are not required to be unique. A streamed
+    # task sharing a title with another task would collide on one carrier and
+    # silently regroup on pull, so refuse to export that rather than corrupt the
+    # plan — the maker gives the tasks distinct titles first.
+    title_counts: dict[str, int] = {}
+    for task in plan.tasks:
+        title = (task.get("title") or "").strip()
+        if title:
+            title_counts[title] = title_counts.get(title, 0) + 1
+    for task in plan.tasks:
+        stream = (task.get("stream") or "").strip()
+        title = (task.get("title") or "").strip()
+        if not stream or not title:
+            continue
+        if title_counts[title] > 1:
+            raise ValueError(
+                f"cannot export plan: task title {title!r} is shared by "
+                f"{title_counts[title]} tasks but carries a workstream label that "
+                "round-trips by title; give these tasks distinct titles before "
+                "pushing so their grouping can't be silently merged"
+            )
+        context.append({
+            "key": f"{_STREAM_KEY_PREFIX}{title}",
+            "value": stream,
+            "group": STREAM_GROUP,
+        })
 
     body: dict[str, Any] = {"configuringAgentName": name}
     if acceptance:
@@ -372,14 +420,26 @@ def hydrate_from_remote(
         tasks_raw = _as_entities(task_entities)
 
     context: list[dict[str, Any]] = []
+    task_streams: dict[str, str] = {}
     for entry in _list(plan_entity, "context", "Context"):
         if not isinstance(entry, dict):
+            continue
+        group = _scalar(entry, "group", "Group", default="")
+        # Stream carriers are an internal round-trip vehicle, not maker context:
+        # capture them (title -> stream) to reattach to tasks below, then drop them
+        # so the local plan never carries the ``taskStream`` group.
+        if group == STREAM_GROUP:
+            key = _scalar(entry, "key", "Key", default="")
+            title = key[len(_STREAM_KEY_PREFIX):] if key.startswith(_STREAM_KEY_PREFIX) else key
+            stream = _scalar(entry, "value", "Value", default="")
+            if title and stream:
+                task_streams[title] = stream
             continue
         context.append(
             context_entry(
                 _scalar(entry, "key", "Key", default=""),
                 _scalar(entry, "value", "Value", default=""),
-                group=_scalar(entry, "group", "Group", default="") or None,
+                group=group or None,
                 description=_scalar(entry, "description", "Description", default="") or None,
                 source="Agent",
             )
@@ -398,6 +458,12 @@ def hydrate_from_remote(
         )
 
     tasks = [_task_from_remote(t) for t in tasks_raw if isinstance(t, dict)]
+    # Reattach the workstream labels the service can't store natively.
+    if task_streams:
+        for task in tasks:
+            stream = task_streams.get((task.get("title") or "").strip())
+            if stream:
+                task["stream"] = stream
     outputs = [_output_from_remote(a) for a in _list(plan_entity, "outputs", "Outputs") if isinstance(a, dict)]
 
     return {

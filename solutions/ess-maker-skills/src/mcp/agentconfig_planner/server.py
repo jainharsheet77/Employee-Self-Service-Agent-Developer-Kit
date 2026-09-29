@@ -180,11 +180,12 @@ async def create_project_plan(
     idempotencyKey: Optional[str] = None,
 ) -> str:
     """Create a plan in a project. Body: configuringAgentName is REQUIRED — the
-    ESS agent this plan configures, one of EmployeeSelfServiceHRCEA,
-    EmployeeSelfServiceHRDA, EmployeeSelfServiceITCEA, EmployeeSelfServiceITDA;
-    then optional ownedById?, acceptanceCriteria?, context?, and tasks? (inline
-    tasks are created atomically with the plan, max 50). Unknown fields are
-    rejected (400). New plans start in Draft."""
+    ESS agent this plan configures. The ESS agent ships as a declarative agent
+    (DA), which is what merges to main, so name one of EmployeeSelfServiceHRDA or
+    EmployeeSelfServiceITDA (HR vs IT is the only choice; there is no DA-vs-custom-
+    engine option). Then optional ownedById?, acceptanceCriteria?, context?, and
+    tasks? (inline tasks are created atomically with the plan, max 50). Unknown
+    fields are rejected (400). New plans start in Draft."""
     return _format(
         await get_client().create_project_plan(projectId, plan, idempotencyKey)
     )

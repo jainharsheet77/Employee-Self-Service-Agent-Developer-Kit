@@ -65,6 +65,20 @@ by "Picking up at Step {N}." Then go to the matching step below.
 setup is not complete here, this is a first run. Unless the maker already asked
 to connect a deployed agent, ask one question before showing the checklist.
 
+**First, is the maker already planning?** If `workspace/plan/plan.json` exists,
+they already started an ESS plan; connecting an environment is **not required** as
+a separate step. Skip the question, show the **plan-in-progress message**, then
+read `src/skills/planner/SKILL.md` and resume their plan — unless they explicitly
+ask to connect a deployed agent now, in which case continue the checklist below.
+
+**Message — a plan is already in progress:**
+
+You already have an ESS plan going, so you don't need to connect an environment as
+a separate step — your plan includes that when it's needed. I'll pick your plan
+back up. If you'd rather connect a deployed agent right now, just say so.
+
+**End message.**
+
 Use the `vscode_askQuestions` tool:
 
 ```json

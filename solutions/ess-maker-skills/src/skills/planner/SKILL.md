@@ -24,6 +24,14 @@ reads/writes go through the CLI so writes are atomic and validated:
 python scripts/planner/cli.py <command> [options]
 ```
 
+**One plan, versioned — and grounded over time.** A project has a **single** plan:
+new goals or edits produce a new *version* of it, never a second competing plan
+(activating a plan archives the prior one — see **First** below). A fresh plan is
+**theoretical** — grounded only in Microsoft Learn and the sponsor's scenarios; it
+becomes **grounded in the tenant** as setup/connect tasks run and Phase 6 captures
+what they produced (the environment id, connections, topics). So the first real
+step is almost always to set up an environment, and the plan sharpens from there.
+
 ## Communication rules (same as every kit skill)
 
 - Never expose internal terminology (skills, files, tools, CLI, JSON) to the
@@ -76,11 +84,14 @@ have checked for an existing plan.**
    the objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
-     produced so far. The task table's **Blocked by** column is the render-time
-     dependency marker: it names the upstream task(s) that still owe an artifact
-     this task consumes (`—` == ready). Call out blocked tasks when you present
-     the plan so nobody starts a task whose inputs don't exist yet. Present it in
-     plain language.
+     produced so far. The task table's **State** column carries the render-time
+     dependency signal, one icon per state: a task still waiting on an upstream
+     artifact it consumes reads as **🔒 Not started** (a ready task is
+     **⬜ Not started**, a running one **🔄 In progress**, a finished one
+     **✅ Complete**). Call out the locked tasks when you present the plan so
+     nobody starts a task whose inputs don't exist yet. Present it in plain
+     language — and **surface the plan's downloadable link first** (the `summary`
+     command prints the exact line; see *Building the plan* below).
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
      front of you (Flow 2): the shared planner already stores the role→person
      mapping, so ask it for the caller's tasks with
@@ -99,10 +110,14 @@ have checked for an existing plan.**
      or **capture** a completed task's output.
    - Only start over on **explicit** confirmation — `init --force` overwrites the
      plan.
-3. **If no plan exists** (or the sponsor explicitly confirmed starting over),
-   create one after you have their one-line goal, then build it through the
-   phases below:
-   `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
+3. **If no plan exists** (or the sponsor explicitly confirmed starting over):
+   - **Did the maker attach or paste a plan of their own?** If so, don't open the
+     blank interview — **import it**: make sense of their plan, persist it, and ask
+     only for what it didn't already say (`src/skills/planner/import.md`). Then
+     continue the phases below from where the upload left off.
+   - **Otherwise**, create one after you have their one-line goal, then build it
+     through the phases below:
+     `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
    The moment the plan is built, **publish it automatically** to the
    shared planner as one object (`src/skills/planner/sync.md`) — never leave it
    local and never wait for the sponsor to ask you to save it. It publishes as
@@ -125,9 +140,9 @@ per **First** above instead of re-running the interview.)
 
 | Phase | What | Read |
 |-------|------|------|
-| 1. Research | Ground on Microsoft Learn (TOC crawl) → capabilities, prerequisites, roles, produced keys | `src/skills/planner/research.md` |
+| 1. Research | Ground on Microsoft Learn (TOC crawl) **and the kit's own skills** (setup/connect checklists + role maps) → capabilities, prerequisites, roles, produced/consumed keys, and the deterministic setup decomposition | `src/skills/planner/research.md` |
 | 2. Interview | Ask only what research couldn't ground; capture intent — then **eagerly render an eval preview** (golden prompts) once scenarios + goals are captured | `src/skills/planner/interview.md` |
-| 3. Model | Emit atomic Tasks (title + description + grounded role + produces) | `src/skills/planner/model.md` |
+| 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then **show its sequencing** — parallel waves, what's blocked, the critical path | `src/skills/planner/model.md` |
 | 4. Assign | Flow 1 — list holders of each grounded role, sponsor picks a person | `src/skills/planner/assign.md` |
 | 5. Evaluate (preview) | Render a scenario-based eval **preview** (golden prompts) — **render-only, generates nothing**; invoked **eagerly from Phase 2** once scenarios + goals are captured | `src/skills/planner/evaluate.md` |
 | 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
@@ -135,14 +150,25 @@ per **First** above instead of re-running the interview.)
 When a person asks **"what am I assigned?"**, skip to Flow 2:
 read `src/skills/planner/mytasks.md`.
 
+When a person asks **"what's the status?"**, "how's the rollout going?", or "what's
+been done so far?", read `src/skills/planner/status.md` — report where the plan
+stands (milestone, what's completed and by whom, what's next) and, on request,
+write a dated snapshot report. This is a **read**: don't re-interview or rebuild
+the plan.
+
 > **Critical — build the whole plan, not just setup.** Run *all six phases in
 > order*. Phase 3 must emit the **full task set** grounded in research and the
-> sponsor's chosen systems/scenarios: the setup task **plus** one connect task
-> per system (e.g. Workday, ServiceNow), authoring tasks per scenario, an evals
-> task, and publish — each with a Learn-grounded role and `produces`/`consumes`
+> sponsor's chosen systems/scenarios: the setup task **plus**, for each captured
+> system, its **role-boundary connect decomposition** researched from that
+> system's setup checklist (Phase 1 axis 2 — Workday is *seven* tasks across five
+> roles, not one coarse "connect" task), authoring tasks per scenario, an evals
+> task, and publish — each with a grounded role and `produces`/`consumes`
 > keys. **Do not stop after adding the "run setup" task.** The interview
 > (Phase 2) must capture *which systems* and *which scenarios* before Phase 3 —
-> those drive the tasks and the roles. As soon as scenarios + goals are captured
+> those drive the tasks and the roles. Once the full set is modelled, **show its
+> sequencing** — the parallel waves, what's blocked on whom, and the critical
+> path (`model.md` → *Sequence the tasks*) — so the rollout can be staffed in
+> parallel. As soon as scenarios + goals are captured
 > (Phase 2), the **eager eval preview** (Phase 5) renders them as golden prompts —
 > **render-only: it generates nothing and doesn't touch the eval skill**.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
@@ -161,9 +187,26 @@ read `src/skills/planner/mytasks.md`.
 ## Building the plan
 
 When creating a new plan — or extending an existing one — work the phases in
-order. After every phase that changes the plan the CLI regenerates the human view
+order. If the maker brought their **own** plan (attached or pasted), start by
+importing it (`src/skills/planner/import.md`): make sense of it, persist it, and
+ask only for the gaps — then work the remaining phases from there. After every
+phase that changes the plan the CLI regenerates the human view
 (`workspace/plan/ESS-scenario-plan.md`); at natural checkpoints show the sponsor
-`python scripts/planner/cli.py summary`. During the interview (Phase 2), once
+`python scripts/planner/cli.py summary`. **Whenever you present a plan — freshly
+built, updated, imported, or resumed — you MUST surface its file as a downloadable
+link in chat *first*, before the readback. This is required, not optional, and it
+is not the same as printing a path in prose.** The plan Markdown is written by the
+CLI (a subprocess), so the chat window never shows it on its own — it appears only
+when you render a clickable Markdown link to it yourself. The `summary` command
+prints that exact line on stderr under `artifact:`; render it **verbatim, above the
+plan body**, e.g.:
+
+```
+📄 [ESS-scenario-plan.md](workspace/plan/ESS-scenario-plan.md) — download or edit your plan
+```
+
+so the maker can save or hand it off, not just read it inline (Bug 7952898). During
+the interview (Phase 2), once
 scenarios + goals are captured, render the **eager eval preview** (Phase 5,
 `src/skills/planner/evaluate.md`) — render-only, it generates nothing; **Phase 6**
 (capture) runs later as each Task executes. Once the plan exists, hand the editor

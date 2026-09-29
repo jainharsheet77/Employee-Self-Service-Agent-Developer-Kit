@@ -40,11 +40,30 @@ The command validates the state schema and prints only the current step
 summary. If it fails, show the specific error and stop. Never recreate or
 overwrite corrupt state silently.
 
-**First run only — confirm the maker actually wants environment setup.** If the
-state just initialized above shows no completed steps and the active step is
-still the first (`SETUP-01`), this is a first `/setup`. Ask one question before
-going any further. Skip it on any resume (a step already completed, or the active
-step has advanced) — a resume proceeds directly to dispatch and needs no input.
+**First run only — decide silently, then ask once.** Work through this gate in a
+single pass with **no narration** (do not say "reading state", "no plan found",
+"this is a first run"): the maker's first visible output is either the
+plan-in-progress message or the opening question.
+
+- If `init` above shows any completed step or an advanced active step, this is a
+  **resume** — go straight to dispatch, no question; `/setup` is never asked again
+  once environment setup is under way.
+- Otherwise it is a first `/setup` (active step `SETUP-01`, nothing completed). If
+  `workspace/plan/plan.json` exists the maker is **already planning**, so a
+  separate `/setup` is **not required** — the plan already carries the "run
+  `/setup`" task for when an environment is actually needed. Show the
+  **plan-in-progress message**, then read `src/skills/planner/SKILL.md` and resume
+  their plan — unless they explicitly ask to configure the environment now.
+- Only when there is **no** plan and no prior progress, ask the opening question
+  below.
+
+**Message — a plan is already in progress:**
+
+You already have an ESS plan going, so you don't need to run setup as a separate
+step — your plan includes the environment setup when it's needed. I'll pick your
+plan back up. If you'd rather configure the environment right now, just say so.
+
+**End message.**
 
 Use the `vscode_askQuestions` tool:
 
