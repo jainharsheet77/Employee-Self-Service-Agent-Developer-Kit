@@ -205,7 +205,24 @@ plan body**, e.g.:
 📄 [ESS-scenario-plan.md](workspace/plan/ESS-scenario-plan.md) — download or edit your plan
 ```
 
-so the maker can save or hand it off, not just read it inline (Bug 7952898). During
+so the maker can save or hand it off, not just read it inline (Bug 7952898).
+**Immediately after that link you MUST render the grouped task checklist inline in
+chat — never collapse it to a bare count like "18 tasks across 6 workstreams".**
+`summary` prints that checklist on stderr under `readback:` (tasks grouped by
+workstream, each line `<state-icon> <title> — <role>`, icons ✅ complete / 🔄 in
+progress / 🔒 blocked or dependency-locked / ⬜ not started); render those lines
+**verbatim, below the link**, e.g.:
+
+```
+**Setup**
+- ⬜ Create a Power Platform Environment — Power Platform Admin (pool)
+- 🔒 Publish the ESS agent — Environment Maker (pool)
+
+**HR Knowledge**
+- ⬜ Connect SharePoint HR library — Environment Maker (pool)
+```
+
+The checklist and the download link are both required, not optional. During
 the interview (Phase 2), once
 scenarios + goals are captured, render the **eager eval preview** (Phase 5,
 `src/skills/planner/evaluate.md`) — render-only, it generates nothing; **Phase 6**

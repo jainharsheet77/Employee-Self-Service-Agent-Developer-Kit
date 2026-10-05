@@ -1830,6 +1830,62 @@ class Plan:
             return "🔒 Not started"
         return "⬜ Not started"
 
+    def _task_state_icon(self, task: dict[str, Any]) -> str:
+        """Just the state glyph behind :meth:`_task_state_label` — ``✅`` complete,
+        ``🔄`` in progress, ``🔒`` blocked or dependency-locked, ``⬜`` ready/not
+        started. Shared by the plan table and the chat task checklist so both
+        views speak one icon vocabulary. Pure/read-only."""
+        state = task.get("state") or "NotStarted"
+        if state == "Completed":
+            return "✅"
+        if state == "InProgress":
+            return "🔄"
+        if state == "Blocked":
+            return "🔒"
+        if self.waiting_on(task.get("id")):
+            return "🔒"
+        return "⬜"
+
+    def render_task_checklist(self) -> str:
+        """The chat-facing task readback the maker sees the moment a plan is saved
+        or changed: the same tasks as the plan's Tasks table, grouped by
+        workstream, but as a scannable checklist — ``<state-icon> <title> —
+        <role>`` per line — so the assistant renders the breakdown inline instead
+        of collapsing it to a bare count ("N tasks across M workstreams"). Reuses
+        :meth:`ordered_tasks` and the table's stream bucketing, so execution order
+        and the dependency lock (``🔒``) match the table exactly; a render-time
+        convenience that mutates nothing. Returns ``""`` when the plan has no
+        tasks (nothing to read back)."""
+        if not self.tasks:
+            return ""
+        ordered = self.ordered_tasks()
+        lines: list[str] = []
+
+        def emit(tasks: list[dict[str, Any]]) -> None:
+            for task in tasks:
+                lines.append(
+                    f"- {self._task_state_icon(task)} {task.get('title')} "
+                    f"— {_render_assignee(task.get('assignedTo'))}"
+                )
+
+        if any((t.get("stream") or "").strip() for t in ordered):
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            stream_order: list[str] = []
+            for task in ordered:
+                label = (task.get("stream") or "").strip() or "Other"
+                if label not in buckets:
+                    buckets[label] = []
+                    stream_order.append(label)
+                buckets[label].append(task)
+            for index, label in enumerate(stream_order):
+                if index:
+                    lines.append("")
+                lines.append(f"**{label}**")
+                emit(buckets[label])
+        else:
+            emit(ordered)
+        return "\n".join(lines)
+
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]
         if not active:

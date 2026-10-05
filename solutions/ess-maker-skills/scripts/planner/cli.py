@@ -29,6 +29,7 @@ import argparse
 import json
 import os
 import sys
+import textwrap
 
 # Ensure scripts/ is on the path so ``import planner...`` resolves when this
 # file is run directly (mirrors scripts/flightcheck/cli.py).
@@ -652,6 +653,16 @@ def cmd_summary(args: argparse.Namespace) -> int:
             f"    \U0001F4C4 [ESS-scenario-plan.md]({link}) — download or edit your plan",
             file=sys.stderr,
         )
+        checklist = plan.render_task_checklist()
+        if checklist:
+            print(
+                "readback: immediately AFTER the download link, render this grouped "
+                "task checklist inline in chat verbatim — it is the breakdown the "
+                "maker expects to see. Do NOT collapse it to a bare count like 'N "
+                "tasks across M workstreams'; render every line:\n"
+                + textwrap.indent(checklist, "    "),
+                file=sys.stderr,
+            )
     # A built plan that isn't on the shared planner yet must be published now —
     # see src/skills/planner/sync.md -> Push.
     if plan.tasks and not plan.data.get("planId"):

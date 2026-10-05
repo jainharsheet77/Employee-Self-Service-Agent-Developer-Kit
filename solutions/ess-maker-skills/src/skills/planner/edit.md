@@ -44,6 +44,11 @@ download and re-upload. Offer the two ways to change it:
 Speak in terms of the plan and its tasks — never mention `plan.json`, the CLI, or
 which files you read.
 
+After any change lands, re-render with `python scripts/planner/cli.py summary` and
+surface the result the same way a fresh plan is presented — the downloadable link
+**then** the grouped task checklist inline (see `SKILL.md` → "Building the plan"),
+never a bare count — so the editor sees exactly what changed.
+
 > **Editing our view vs. importing their plan.** This file reconciles a re-upload
 > of the kit's **own** `ESS-scenario-plan.md` (diffed by task id) into a plan that
 > **already exists**. A maker attaching a plan in **their own** shape when no plan

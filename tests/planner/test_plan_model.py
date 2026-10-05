@@ -399,6 +399,66 @@ def test_render_summary_locks_dependent_tasks():
     assert "⬜ Not started" in rows["produce"]
 
 
+# --------------------------------------------------------------------------- #
+# Chat task checklist (deterministic readback the assistant echoes verbatim)
+# --------------------------------------------------------------------------- #
+
+def test_render_task_checklist_groups_by_stream_with_icons_and_roles():
+    plan = Plan.new()
+    plan.add_task(new_task(
+        "T1", "Create a Power Platform Environment", stream="Setup",
+        assigned_to=principal_pool("pp-admin"), produces=["envId"],
+    ))
+    plan.add_task(new_task(
+        "T2", "Connect Workday", stream="Workday",
+        assigned_to=principal_pool("workday-admin"),
+    ))
+    checklist = plan.render_task_checklist()
+    # Grouped under a bold workstream header, each task `<icon> <title> — <role>`.
+    assert "**Setup**" in checklist
+    assert "**Workday**" in checklist
+    assert "- ⬜ Create a Power Platform Environment — pp-admin (pool)" in checklist
+    assert "- ⬜ Connect Workday — workday-admin (pool)" in checklist
+    # Streams keep execution order (Setup before Workday).
+    assert checklist.index("**Setup**") < checklist.index("**Workday**")
+
+
+def test_render_task_checklist_locks_dependent_task():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", stream="S", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", stream="S", produces=["envId"]))
+    checklist = plan.render_task_checklist()
+    # The consumer waits on its producer -> 🔒; the ready producer -> ⬜. The
+    # producer renders before the consumer (same execution order as the table).
+    assert "- 🔒 consume" in checklist
+    assert "- ⬜ produce" in checklist
+    assert checklist.index("produce") < checklist.index("consume")
+
+
+def test_render_task_checklist_shows_one_icon_per_state():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "done", state="Completed"))
+    plan.add_task(new_task("T2", "doing", state="InProgress"))
+    plan.add_task(new_task("T3", "stuck", state="Blocked"))
+    checklist = plan.render_task_checklist()
+    assert "- ✅ done" in checklist
+    assert "- 🔄 doing" in checklist
+    assert "- 🔒 stuck" in checklist
+
+
+def test_render_task_checklist_flat_without_streams():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "lonely"))
+    checklist = plan.render_task_checklist()
+    # No stream on any task -> a single flat list, no workstream headers.
+    assert checklist == "- ⬜ lonely — unassigned"
+    assert "**" not in checklist
+
+
+def test_render_task_checklist_empty_when_no_tasks():
+    assert Plan.new().render_task_checklist() == ""
+
+
 def test_tasks_for_person_reports_waiting_on():
     plan = Plan.new()
     plan.add_task(new_task(
