@@ -521,10 +521,12 @@ class AgentConfigBaseClient:
                         reauth_attempts += 1
                         continue
                     raise AgentConfigApiError(
-                        "Unauthorized (HTTP 401): the AgentConfiguration sign-in "
-                        "has expired or was revoked and could not be renewed "
-                        "automatically. Sign in again, then retry the planner "
-                        "action and complete the browser sign-in when prompted.",
+                        "Unauthorized (HTTP 401): the AgentConfiguration session "
+                        "expired or was revoked, and the browser sign-in the tool "
+                        "already opened did not clear it — the account may not have "
+                        "access to the shared plan. You may need to sign in again "
+                        "with a work account that does; meanwhile planning continues "
+                        "locally and syncs on the next successful call.",
                         http_status=401,
                     )
                 if response.status_code == 429 or response.status_code in (

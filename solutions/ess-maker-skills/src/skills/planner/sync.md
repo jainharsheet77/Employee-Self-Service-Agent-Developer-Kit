@@ -16,14 +16,39 @@ authored plan as one object.
   tools only talk to the service. You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
 
-A planner tool call recovers from an expired sign-in on its own: on a 401 it
-renews the token — silently when it can, otherwise by opening a browser sign-in —
-and replays the call. So if a browser sign-in window appears, ask the sponsor to
-complete it, and the action continues. Only if a call still returns an explicit
-**"sign in again" (HTTP 401)** error — the session expired and could not be
-renewed — stop and ask the sponsor to authenticate before progressing, then retry
-the same call. If the tools stay unreachable, fall back to the local cache and
-carry on — planning is never blocked by the service being offline.
+**Sign-in is the tool's job — never ask the sponsor whether to sign in.** Each
+planner tool authenticates itself, and on an expired/rejected token (a 401) it
+renews in place: silently when the refresh token is still good (no window), and
+otherwise by **opening a browser sign-in itself** and replaying the call once the
+sponsor finishes. That browser prompt is the *only* interaction sign-in ever needs —
+so you never diagnose it, never narrate the mechanism, never read any MCP/auth
+source to explain it, and above all **never present an `ask_user` / "how would you
+like to proceed?" choice about signing in.** Treat each call by walking this
+ladder **in order** — never cycle back up it:
+
+- **It succeeds** — possibly after a sign-in window appeared mid-call and the
+  sponsor completed it. Expected; just carry on. Say nothing about sign-in.
+- **It still returns an explicit "sign in again" (HTTP 401)** after the tool's own
+  browser sign-in — the server can be wedged on a dead in-memory session that only a
+  fresh process clears. Take **one** mechanical recovery, then retry the same call
+  **once**: restart the `ess-planner` MCP server — run the editor's *MCP: Restart
+  Server* command yourself if that's available to you, otherwise tell the sponsor in
+  one plain line to run it (Command Palette → *MCP: Restart Server* → `ess-planner`).
+  The restart rebuilds the client and re-triggers a clean sign-in.
+- **It 401s again even after that restart + retry** — stop. Say one plain line —
+  *"I'll keep the plan local for now; it'll save to the shared space on the next
+  successful sync"* — and continue locally. A 401 that survives a fresh sign-in and a
+  restart means the account can't reach the shared plan; nothing more you do helps.
+- **Any non-401 failure** (network error, 5xx) — fall back to the local cache the
+  same way, silently.
+
+That single restart is the **only** mechanical recovery you ever take. Do **not**
+clear or inspect token caches, read any MCP/auth source, check the token source, or
+reason about the client's internals — that is the spiral to avoid, not a path to a
+fix. The whole budget is: one 401 → at most one restart + one retry → then local.
+Never open a diagnostic thread, and the sponsor is only ever prompted by the tool's
+own sign-in window or that one restart line — never by a "how would you like to
+proceed?" question. Planning is never blocked by the service.
 
 ## Identify the project (always first)
 
