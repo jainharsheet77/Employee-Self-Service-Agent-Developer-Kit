@@ -51,6 +51,9 @@ _AUTHORITY = "https://login.microsoftonline.com/organizations"
 _CORE_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOCAL_STATE_DIR = os.path.join(_CORE_DIR, ".local")
 _TOKEN_CACHE_PATH = os.path.join(_LOCAL_STATE_DIR, "msal_token_cache.bin")
+# How many times a single request may re-authenticate after a 401 before giving
+# up: one silent force-refresh, then one explicit interactive sign-in.
+_MAX_REAUTH_ATTEMPTS = 2
 
 
 class AgentConfigApiError(RuntimeError):
@@ -61,27 +64,42 @@ class AgentConfigApiError(RuntimeError):
         self.http_status = http_status
 
 
-def _resolve_token() -> str:
-    """Resolve a token without writing it to logs or MCP configuration."""
+def _read_token_file(path: str) -> str:
+    """Read and validate a bearer token from ``AGENTCONFIG_ACCESS_TOKEN_FILE``."""
+    if not os.path.isfile(path):
+        raise ValueError(
+            f"AGENTCONFIG_ACCESS_TOKEN_FILE={path!r} does not exist"
+        )
+    with open(path, "r", encoding="utf-8") as handle:
+        token = handle.read().strip()
+    if not token:
+        raise ValueError(
+            f"AGENTCONFIG_ACCESS_TOKEN_FILE={path!r} is empty"
+        )
+    return token
+
+
+def _resolve_token_with_source() -> tuple[str, str]:
+    """Resolve a token and record HOW it was obtained, so a later 401 knows
+    whether it can renew in-process. ``"file"``/``"env"`` tokens are injected
+    out-of-band and cannot be refreshed here (the caller surfaces an explicit
+    sign-in error); an ``"msal"`` token can be force-refreshed or re-acquired
+    through an interactive sign-in. Priority is unchanged: token file, then env
+    var, then interactive MSAL."""
     token_file = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
     if token_file:
-        if not os.path.isfile(token_file):
-            raise ValueError(
-                f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} does not exist"
-            )
-        with open(token_file, "r", encoding="utf-8") as handle:
-            token = handle.read().strip()
-        if not token:
-            raise ValueError(
-                f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} is empty"
-            )
-        return token
+        return _read_token_file(token_file), "file"
 
     token = os.environ.get("AGENTCONFIG_ACCESS_TOKEN", "").strip()
     if token:
-        return token
+        return token, "env"
 
-    return acquire_token_msal_interactive()
+    return acquire_token_msal_interactive(), "msal"
+
+
+def _resolve_token() -> str:
+    """Resolve a token without its source (see :func:`_resolve_token_with_source`)."""
+    return _resolve_token_with_source()[0]
 
 
 class _FormPostCaptureHandler(http.server.BaseHTTPRequestHandler):
@@ -154,6 +172,43 @@ def acquire_token_msal_interactive() -> str:
 
     accounts = app.get_accounts()
     result = app.acquire_token_silent(_SCOPE, account=accounts[0]) if accounts else None
+    if not result or "access_token" not in result:
+        result = _acquire_token_interactive_form_post(app)
+
+    _save_msal_cache(cache)
+    if "access_token" not in result:
+        error = result.get("error", "unknown_error")
+        description = result.get("error_description", "")
+        raise ValueError(f"MSAL sign-in failed ({error}): {description}")
+    return result["access_token"]
+
+
+def acquire_token_msal_refreshed(*, force_interactive: bool = False) -> str:
+    """Re-acquire a delegated AgentConfiguration token after a 401.
+
+    Unless ``force_interactive``, first force-refresh silently
+    (``force_refresh=True`` bypasses the cached — now server-rejected — access
+    token and spends the refresh token, no browser). Fall back to an interactive
+    sign-in when the refresh token is gone, interaction is required, or
+    ``force_interactive`` is set — that interactive prompt is the explicit login
+    the user is asked for before the planner can progress past a dead session.
+    """
+    import msal
+
+    cache = _load_msal_cache()
+    app = msal.PublicClientApplication(
+        _CLIENT_ID,
+        authority=_AUTHORITY,
+        token_cache=cache,
+    )
+
+    result = None
+    if not force_interactive:
+        accounts = app.get_accounts()
+        if accounts:
+            result = app.acquire_token_silent(
+                _SCOPE, account=accounts[0], force_refresh=True
+            )
     if not result or "access_token" not in result:
         result = _acquire_token_interactive_form_post(app)
 
@@ -276,13 +331,16 @@ class AgentConfigBaseClient:
     ):
         self.base_url = base_url.rstrip("/")
         self._logger = logging.getLogger(logger_name)
-        self._token = _resolve_token()
+        self._token, self._token_source = _resolve_token_with_source()
         self.tenant_id = _decode_tenant_id_from_jwt(self._token)
         self.max_retries = 3
         self.timeout = 30.0
         self._transport = transport
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
+        # Serializes 401 recovery so a burst of concurrent 401s triggers at most
+        # one re-authentication / interactive sign-in.
+        self._auth_lock = asyncio.Lock()
 
     def __repr__(self) -> str:
         return (
@@ -347,6 +405,66 @@ class AgentConfigBaseClient:
             await self._client.aclose()
         self._client = None
 
+    async def _reset_client(self) -> None:
+        """Drop the cached httpx session so the next :meth:`_ensure_client`
+        rebuilds it carrying the refreshed bearer in its Authorization header.
+        Used after a 401 re-auth replaces :attr:`_token`."""
+        async with self._client_lock:
+            if self._client is not None and not self._client.is_closed:
+                await self._client.aclose()
+            self._client = None
+
+    def _on_token_refreshed(self) -> None:
+        """Hook: re-derive any token-scoped state a subclass caches after a 401
+        re-auth. The neutral core keeps only :attr:`tenant_id` (already re-decoded
+        by :meth:`_reauthenticate`); subclasses override to refresh their own —
+        e.g. the planner's caller ``oid``."""
+
+    def _acquire_refreshed_token(self, force_interactive: bool) -> Optional[str]:
+        """Blocking token re-acquisition behind :meth:`_reauthenticate` (run in a
+        worker thread). An ``msal`` token is force-refreshed, escalating to an
+        interactive sign-in when the refresh token is gone; a token injected via
+        ``AGENTCONFIG_ACCESS_TOKEN`` is fixed for the process so this returns
+        ``None``; a token *file* is re-read in case an external broker rotated it,
+        returning ``None`` when it is unchanged or unreadable. ``None`` tells the
+        caller re-auth is impossible so it surfaces an explicit sign-in error."""
+        if self._token_source == "msal":
+            return acquire_token_msal_refreshed(force_interactive=force_interactive)
+        if self._token_source == "file":
+            path = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
+            try:
+                return _read_token_file(path)
+            except (ValueError, OSError):
+                return None
+        return None
+
+    async def _reauthenticate(self, *, force_interactive: bool, seen_token: str) -> bool:
+        """Recover from a 401 by replacing the expired/revoked bearer and rebuilding
+        the session so the retry carries a live token.
+
+        Returns ``True`` when a usable new token is in place — obtained here, or
+        already refreshed by a concurrent caller — and ``False`` when the token was
+        injected out-of-band (env var / file) and cannot be renewed in-process, so
+        the caller surfaces an explicit sign-in error. Serialized on
+        :attr:`_auth_lock` so a burst of concurrent 401s triggers at most one
+        sign-in; the blocking acquisition runs in a thread so it never stalls the
+        event loop (the interactive flow can wait minutes on the browser)."""
+        async with self._auth_lock:
+            if self._token != seen_token:
+                # A concurrent caller already refreshed while we waited on the lock.
+                return True
+            loop = asyncio.get_running_loop()
+            new_token = await loop.run_in_executor(
+                None, self._acquire_refreshed_token, force_interactive
+            )
+            if not new_token or new_token == self._token:
+                return False
+            self._token = new_token
+            self.tenant_id = _decode_tenant_id_from_jwt(self._token)
+            self._on_token_refreshed()
+            await self._reset_client()
+            return True
+
     async def _request(
         self,
         method: str,
@@ -373,16 +491,42 @@ class AgentConfigBaseClient:
         opt out, and that unsafe create is surfaced instead of retried so a
         committed-but-unacknowledged POST is never duplicated. A 429 is always
         retried because the service rejects it before doing any work.
+
+        A **401** is handled separately from the transient codes: a stale or
+        revoked bearer makes every call fail with the *same* dead token (the
+        session caches it), so a plain retry can never clear it. The request
+        re-authenticates in place — one silent force-refresh, then an explicit
+        interactive sign-in — and replays once. When the token was injected
+        out-of-band (env var / file) and cannot be renewed in-process, the call
+        surfaces an explicit "sign in again" error instead of looping on 401s.
         """
         # Default to retry-safe so the landing-page surface keeps its original
         # retry-on-transient behavior; only call sites that would genuinely
         # duplicate on replay (unkeyed creates) opt out with idempotent=False.
         retry_safe = True if idempotent is None else idempotent
         last_error: Optional[Exception] = None
+        reauth_attempts = 0
         for attempt in range(self.max_retries):
             client = await self._ensure_client()
+            request_token = self._token
             try:
                 response = await client.request(method, path, **kwargs)
+                if response.status_code == 401:
+                    if reauth_attempts < _MAX_REAUTH_ATTEMPTS and (
+                        await self._reauthenticate(
+                            force_interactive=reauth_attempts >= 1,
+                            seen_token=request_token,
+                        )
+                    ):
+                        reauth_attempts += 1
+                        continue
+                    raise AgentConfigApiError(
+                        "Unauthorized (HTTP 401): the AgentConfiguration sign-in "
+                        "has expired or was revoked and could not be renewed "
+                        "automatically. Sign in again, then retry the planner "
+                        "action and complete the browser sign-in when prompted.",
+                        http_status=401,
+                    )
                 if response.status_code == 429 or response.status_code in (
                     502,
                     503,

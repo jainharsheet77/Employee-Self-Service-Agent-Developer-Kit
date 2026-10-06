@@ -16,9 +16,14 @@ authored plan as one object.
   tools only talk to the service. You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
 
-If a planner tool reports it needs sign-in, ask the sponsor to authenticate once,
-then retry the same call. If the tools stay unreachable, fall back to the local
-cache and carry on — planning is never blocked by the service being offline.
+A planner tool call recovers from an expired sign-in on its own: on a 401 it
+renews the token — silently when it can, otherwise by opening a browser sign-in —
+and replays the call. So if a browser sign-in window appears, ask the sponsor to
+complete it, and the action continues. Only if a call still returns an explicit
+**"sign in again" (HTTP 401)** error — the session expired and could not be
+renewed — stop and ask the sponsor to authenticate before progressing, then retry
+the same call. If the tools stay unreachable, fall back to the local cache and
+carry on — planning is never blocked by the service being offline.
 
 ## Identify the project (always first)
 

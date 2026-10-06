@@ -979,3 +979,113 @@ def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
     posts = [r for r in calls if r.method == "POST"]
     assert len(posts) == 2  # an Idempotency-Key makes the create retry-safe
     assert all("Idempotency-Key" in p.headers for p in posts)
+
+
+# ---------------------------------------------------------------------------
+# 401 recovery: a stale/revoked bearer makes every call fail with the SAME dead
+# token (the session caches it), so a plain retry can never clear it. The core
+# re-authenticates in place (silent force-refresh, then an explicit interactive
+# sign-in) and replays once; an env/file token that can't be renewed in-process
+# surfaces an explicit "sign in again" error instead of looping on 401s.
+# ---------------------------------------------------------------------------
+def _token_variant(marker: str) -> str:
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": TENANT_ID, "oid": CALLER_OID, "m": marker}).encode("utf-8")
+    ).rstrip(b"=")
+    return f"header.{payload.decode('ascii')}.signature"
+
+
+def test_401_with_injected_env_token_surfaces_signin_error(monkeypatch) -> None:
+    # An env token is fixed for the process and can't be renewed in-process, so a
+    # 401 is surfaced as an explicit sign-in error after a SINGLE request — no
+    # pointless replay on the same dead token.
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(401, json={"Code": "Unauthorized", "Message": "expired"})
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.list_project_plan_tasks("proj1", "plan1"))
+
+    assert excinfo.value.http_status == 401
+    assert "sign in again" in str(excinfo.value).lower()
+    assert len(calls) == 1
+
+
+def test_401_with_msal_token_silently_refreshes_and_replays(monkeypatch) -> None:
+    # The common case: the access token expired but the refresh token is good. The
+    # core force-refreshes silently (no browser) and replays the call with the new
+    # bearer — the maker never sees a 401.
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AGENTCONFIG_PROJECTS_BASE_URL", raising=False)
+    stale, fresh = _token_variant("stale"), _token_variant("fresh")
+    monkeypatch.setattr(
+        base_client_module, "acquire_token_msal_interactive", lambda: stale
+    )
+    forced: list[bool] = []
+
+    def _refresh(*, force_interactive: bool = False) -> str:
+        forced.append(force_interactive)
+        return fresh
+
+    monkeypatch.setattr(base_client_module, "acquire_token_msal_refreshed", _refresh)
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        auth = request.headers.get("Authorization", "")
+        seen.append(auth)
+        if auth.endswith(stale):
+            return httpx.Response(401, json={"Code": "Unauthorized", "Message": "exp"})
+        return httpx.Response(200, json={"value": []})
+
+    client = planner_client_module.PlannerClient(transport=httpx.MockTransport(handler))
+    result = _run(client, lambda: client.list_project_plan_tasks("proj1", "plan1"))
+
+    assert result == {"value": []}
+    assert forced == [False]  # silent refresh first, never a forced browser prompt
+    assert len(seen) == 2
+    assert seen[0].endswith(stale) and seen[1].endswith(fresh)
+    assert client._caller_object_id == CALLER_OID  # oid re-derived from the new token
+
+
+def test_401_persisting_after_refresh_escalates_to_interactive_then_errors(
+    monkeypatch,
+) -> None:
+    # The refreshed token is ALSO rejected: the second recovery forces an explicit
+    # interactive sign-in, and when even that keeps 401-ing the call stops with the
+    # explicit sign-in error rather than looping forever.
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AGENTCONFIG_PROJECTS_BASE_URL", raising=False)
+    monkeypatch.setattr(
+        base_client_module,
+        "acquire_token_msal_interactive",
+        lambda: _token_variant("stale"),
+    )
+    forced: list[bool] = []
+    counter = iter(range(1, 99))
+
+    def _refresh(*, force_interactive: bool = False) -> str:
+        forced.append(force_interactive)
+        return _token_variant(f"t{next(counter)}")
+
+    monkeypatch.setattr(base_client_module, "acquire_token_msal_refreshed", _refresh)
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers.get("Authorization", ""))
+        return httpx.Response(401, json={"Code": "Unauthorized", "Message": "exp"})
+
+    client = planner_client_module.PlannerClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.list_project_plan_tasks("proj1", "plan1"))
+
+    assert excinfo.value.http_status == 401
+    assert "sign in again" in str(excinfo.value).lower()
+    assert forced == [False, True]  # silent refresh, then an explicit interactive login
+    assert len(seen) == 3  # original + two replays, bounded (no infinite 401 loop)
