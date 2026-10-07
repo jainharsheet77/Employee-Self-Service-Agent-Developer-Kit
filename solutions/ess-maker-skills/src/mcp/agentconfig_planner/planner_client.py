@@ -60,12 +60,6 @@ class PlannerClient(PlannerMixin, RolesMixin, AgentConfigBaseClient):
         self.projects_base_url = projects_base_url
         self._caller_object_id = _decode_object_id_from_jwt(self._token)
 
-    def _on_token_refreshed(self) -> None:
-        # A 401 re-auth re-mints the token (and an interactive sign-in may select a
-        # different account), so re-derive the caller oid the task-scoping routes
-        # (list-tasks-for-caller) read from it.
-        self._caller_object_id = _decode_object_id_from_jwt(self._token)
-
     def __repr__(self) -> str:
         return (
             f"<PlannerClient projects_base_url={self.projects_base_url!r} "
