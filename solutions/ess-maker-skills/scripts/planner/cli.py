@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from planner import research, setup_tasks
 from planner.capture import (
+    INVENTORY_MIRROR_PATH,
     detect_config_artifacts,
     read_config,
     snapshot_config,
@@ -223,7 +224,9 @@ def cmd_check_deps(args: argparse.Namespace) -> int:
     status = plan.scenario_dependency_status()
     gaps = plan.task_consume_gaps()
     if args.json:
-        print(json.dumps(status, indent=2))
+        print(json.dumps(
+            {"scenarioDependencies": status, "taskGraphGaps": gaps}, indent=2
+        ))
         return 1 if gaps else 0
     met = [e for e in status if e.get("met")]
     unmet = [e for e in status if not e.get("met")]
@@ -408,13 +411,25 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
         # run fully produced too, so running the skill completes all the tasks it
         # covers, not just the one that triggered the capture.
         pinned_keys = {a["key"] for a in pinned}
+        pinned_by_key = {a["key"]: a for a in pinned}
         also_completed: list[str] = []
         for t in plan.tasks:
             tid = t["id"]
             if tid == task_id or t.get("state") == "Completed":
                 continue
             produces = t.get("produces") or []
-            if any(k in pinned_keys for k in produces) and not plan.unresolved_produces(tid):
+            # Close a split task only when THIS run produced EVERY one of its
+            # declared outputs — not when an earlier run already satisfied the
+            # rest (unresolved_produces counts all-time active outputs, so an
+            # `any(...)` test would complete a task on partial credit). And
+            # re-attribute each such output to the task that actually owns it:
+            # detect_config_artifacts stamped them all with the setup task_id, so
+            # without this a split base-agent task is Completed while its artifact
+            # belongs to the setup task — and removing that setup task later
+            # cascade-deletes the artifact, leaving the completed task unresolved.
+            if produces and all(k in pinned_keys for k in produces):
+                for key in produces:
+                    pinned_by_key[key]["producedByTaskId"] = tid
                 plan.set_task_state(tid, "Completed")
                 also_completed.append(tid)
         if also_completed:
@@ -459,12 +474,18 @@ def cmd_capture_discover(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    updated_at = read_config(args.config).get("inventoryUpdatedAt")
+    config = read_config(args.config)
+    updated_at = config.get("inventoryUpdatedAt")
+    # ``/discover --inventory-out`` records where it actually mirrored the inventory
+    # in ``config.json`` (``inventoryPath``). Honour that so a custom mirror path is
+    # not silently overwritten by the parser default; an explicit --inventory-path
+    # still wins, and the mirror default is the last-resort fallback.
+    inventory_path = args.inventory_path or config.get("inventoryPath") or INVENTORY_MIRROR_PATH
     artifact = summarize_discovery(
         results,
         task_id=task_id,
         key=args.key,
-        inventory_path=args.inventory_path,
+        inventory_path=inventory_path,
         results_path=args.results,
         updated_at=updated_at,
     )
@@ -952,8 +973,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key", default="tenantInventory")
     p.add_argument("--results", default=os.path.join("workspace", "discover", "results.json"),
                    help="the /discover results JSON to summarize")
-    p.add_argument("--inventory-path", dest="inventory_path", default=os.path.join(".local", "inventory.json"),
-                   help="pointer to the durable local inventory mirror recorded on the artifact")
+    p.add_argument("--inventory-path", dest="inventory_path", default=None,
+                   help="pointer to the durable local inventory mirror recorded on the artifact "
+                        "(default: the inventoryPath in config.json, else .local/inventory.json)")
     p.add_argument("--config", default=os.path.join(".local", "config.json"),
                    help="config.json to read inventoryUpdatedAt from")
     p.add_argument("--dry-run", dest="dry_run", action="store_true", help="detect and print the artifact without saving (preview for confirm-before-pin)")

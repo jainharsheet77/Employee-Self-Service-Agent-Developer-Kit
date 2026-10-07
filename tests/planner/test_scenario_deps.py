@@ -176,8 +176,9 @@ def test_cli_scenario_dependency_flow(tmp_path, capsys):
     # check-deps surfaces the PM-spec knowledge->ticketing dependency as unmet.
     rc = cli.main(["--plan", plan_path, "check-deps", "--json"])
     assert rc == 0
-    unmet = json.loads(capsys.readouterr().out)
-    assert unmet[0]["dependsOn"] == "hr-knowledge"
+    report = json.loads(capsys.readouterr().out)
+    assert report["scenarioDependencies"][0]["dependsOn"] == "hr-knowledge"
+    assert report["taskGraphGaps"] == []
 
     # Add knowledge + the explicit edge -> no longer unmet.
     cli.main(["--plan", plan_path, "add-scenario", "--id", "hr-knowledge", "--label", "HR knowledge"])

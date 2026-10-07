@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from planner import cli
-from planner.plan_model import Plan
+from planner.plan_model import Plan, plan_artifact
 
 PAUL = "00000000-0000-0000-0000-0000000000b1"
 
@@ -219,6 +219,51 @@ def test_capture_setup_completes_every_task_the_run_produced(tmp_path, capsys):
     plan = Plan.load(plan_path)
     assert plan.task("T1")["state"] == "Completed"   # the triggered task
     assert plan.task("T2")["state"] == "Completed"   # closed by the same /setup run
+    # The base-agent artifact is attributed to the task that OWNS it (T2), not the
+    # setup task that happened to capture it — so removing the setup task later
+    # cannot cascade-delete the output T2 depends on.
+    assert plan.output("essAgent")["producedByTaskId"] == "T2"
+    plan.remove_task("T1")
+    assert plan.output("essAgent") is not None          # survives T1 removal
+    assert plan.unresolved_produces("T2") == []          # T2 stays legitimately done
+
+
+def test_capture_setup_only_completes_tasks_fully_produced_this_run(tmp_path, capsys):
+    """A split task whose outputs were only PARTLY produced by this run stays open:
+    an earlier run satisfying the rest must not let one freshly pinned key close it."""
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "setup": "complete",
+            "dataverseEndpoint": "https://org.crm.dynamics.com",
+            "environmentId": "env-123",
+            "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
+        }),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Onboard the ADK (run /setup)", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    # T2 needs BOTH essAgent (pinned this run) AND evalSuite (produced earlier).
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Install the base agent",
+         "--description", "Clone the ESS base agent", "--role", "env-maker",
+         "--produces", "essAgent,evalSuite", "--consumes", "primaryEnvironment")
+    # Pin evalSuite from an EARLIER run, so unresolved_produces(T2) would be empty.
+    plan = Plan.load(plan_path)
+    plan.add_output(plan_artifact("evalSuite", "Custom", {"id": "s"}, produced_by_task_id="T2"))
+    plan.save(plan_path)
+    capsys.readouterr()
+
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1",
+              "--config", str(config_path), "--before", "{}", "--complete")
+    assert rc == 0
+
+    plan = Plan.load(plan_path)
+    assert plan.task("T1")["state"] == "Completed"
+    # This run produced essAgent but NOT evalSuite, so it must not close T2.
+    assert plan.task("T2")["state"] != "Completed"
 
 
 def test_capture_setup_leaves_unrelated_tasks_open(tmp_path, capsys):

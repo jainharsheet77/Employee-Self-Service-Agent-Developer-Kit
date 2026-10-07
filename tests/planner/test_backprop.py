@@ -178,6 +178,44 @@ def test_capture_discover_autodetects_and_pins(tmp_path, capsys):
     assert p.task("T1")["state"] == "NotStarted"  # setup task untouched
 
 
+def test_capture_discover_defaults_inventory_path_from_config(tmp_path, capsys):
+    # /discover --inventory-out records where it mirrored the inventory in config.json;
+    # capture-discover must pin THAT path (not the parser default) so downstream tasks
+    # read the real mirror.
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    _write_results(results)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"inventoryPath": "custom/dir/inventory.json"}), encoding="utf-8")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover", "--role", "power-platform-admin", "--produces", "tenantInventory")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results),
+              "--config", str(cfg), "--complete")
+    assert rc == 0
+    art = Plan.load(plan_path).output("tenantInventory")
+    assert art["attributes"]["inventoryPath"] == "custom/dir/inventory.json"
+
+
+def test_capture_discover_inventory_path_flag_overrides_config(tmp_path, capsys):
+    # An explicit --inventory-path still wins over the config pointer.
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    _write_results(results)
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"inventoryPath": "from/config.json"}), encoding="utf-8")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover", "--role", "power-platform-admin", "--produces", "tenantInventory")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results),
+              "--config", str(cfg), "--inventory-path", "explicit/override.json", "--complete")
+    assert rc == 0
+    art = Plan.load(plan_path).output("tenantInventory")
+    assert art["attributes"]["inventoryPath"] == "explicit/override.json"
+
+
 def test_capture_discover_no_discover_task_is_noop(tmp_path, capsys):
     # A plan with no tenant-inventory task means this was a standalone /discover run,
     # not part of a tracked rollout -> the skill skips silently on this nonzero rc.

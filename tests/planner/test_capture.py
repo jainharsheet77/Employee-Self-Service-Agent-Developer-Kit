@@ -228,6 +228,8 @@ def test_summarize_discovery_shapes_tenant_inventory():
     assert attrs["kindsCrawled"] == 3
     assert attrs["writePath"] == "mcp:substrate.office.com"
     assert attrs["writeDegraded"] == "false"          # bool -> scalar string
+    assert attrs["syncWithheld"] == "false"           # no blockedReason -> not withheld
+    assert "syncWithheldReason" not in attrs
     assert attrs["inventoryPath"].endswith("inventory.json")
     # per-kind counts, sorted, space-joined (no commas -> renders cleanly in the table)
     assert attrs["resources"] == "Connection:2 EntraApp:1 Environment:1"
@@ -249,6 +251,24 @@ def test_summarize_discovery_degraded_still_pins():
     assert art is not None
     assert art["attributes"]["writeDegraded"] == "true"
     assert art["attributes"]["writePath"] == ""
+
+
+def test_summarize_discovery_withheld_is_flagged_not_persisted():
+    # exit 2 variant: the crawl succeeded AND the service was reachable
+    # (writeDegraded stays false, writePath is a real server path), but the
+    # whole-inventory payload was withheld for safety. Without the withheld flag the
+    # clean writePath would read as a server persist that never happened.
+    withheld = dict(
+        DISCOVER_RESULTS,
+        sync={"attempted": True, "blockedReason": "incomplete scope coverage"},
+    )
+    art = summarize_discovery(withheld, task_id="T2")
+    assert art is not None
+    attrs = art["attributes"]
+    assert attrs["writeDegraded"] == "false"                 # not a write-path failure
+    assert attrs["writePath"] == "mcp:substrate.office.com"  # service was reachable
+    assert attrs["syncWithheld"] == "true"
+    assert attrs["syncWithheldReason"] == "incomplete scope coverage"
 
 
 def test_summarize_discovery_empty_run_and_updated_at():

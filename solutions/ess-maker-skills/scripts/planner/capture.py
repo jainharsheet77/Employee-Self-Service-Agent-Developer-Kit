@@ -360,9 +360,14 @@ def summarize_discovery(
     to pin — the discover task legitimately stays open. A **degraded** run (the crawl
     succeeded but the server write failed, exit ``2``) still refreshed the durable
     local mirror, so it IS captured; the artifact records ``writeDegraded="true"`` so
-    the plan stays honest about it. The full per-resource picture is not copied onto
-    the plan — the artifact carries per-kind counts plus a pointer to the mirror
-    (``inventoryPath``) that holds the detail.
+    the plan stays honest about it. A **sync-withheld** run (the crawl succeeded and
+    the service was reachable, but the whole-inventory payload was withheld for
+    safety, exit ``2``) likewise refreshed the mirror and IS captured, but records
+    ``syncWithheld="true"`` plus the reason — otherwise the clean ``writePath`` and
+    ``writeDegraded="false"`` would read as a server persist that never happened. The
+    full per-resource picture is not copied onto the plan — the artifact carries
+    per-kind counts plus a pointer to the mirror (``inventoryPath``) that holds the
+    detail.
     """
     if not isinstance(results, dict):
         return None
@@ -380,6 +385,13 @@ def summarize_discovery(
     }
     resources = " ".join(f"{kind}:{counts[kind]}" for kind in sorted(counts))
 
+    # Three distinct "did this reach the server?" states must stay honest on the
+    # plan. ``writeDegraded`` covers a failed write path; separately, a sync can be
+    # *withheld for safety* — the service was reachable (``writeDegraded`` is false
+    # and ``writePath`` is a real server path), but the whole-inventory payload was
+    # not submitted. Without carrying the withheld flag that run reads as persisted,
+    # so pin it (and its reason) onto the artifact.
+    withheld_reason = str((results.get("sync") or {}).get("blockedReason") or "")
     attributes: dict[str, Any] = {
         "inventoryPath": inventory_path,
         "resultsPath": results_path,
@@ -387,7 +399,10 @@ def summarize_discovery(
         "kindsCrawled": int(totals.get("kindsCrawled", len(counts)) or 0),
         "writePath": str(results.get("writePath", "") or ""),
         "writeDegraded": "true" if results.get("writeDegraded") else "false",
+        "syncWithheld": "true" if withheld_reason else "false",
     }
+    if withheld_reason:
+        attributes["syncWithheldReason"] = withheld_reason
     if resources:
         attributes["resources"] = resources
     correlation_id = results.get("correlationId")
