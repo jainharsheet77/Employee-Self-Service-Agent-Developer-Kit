@@ -1,8 +1,8 @@
 # Planner — Editing the plan (the Markdown round-trip)
 
 The Plan's human view — `workspace/plan/ESS-scenario-plan.md` — is not just a
-read-out. It is the **editable surface** a Plan editor works with. The CLI
-regenerates it from `plan.json` after every change, and the editor can revise it
+read-out. It is the **editable surface** the maker works with. The CLI
+regenerates it from `plan.json` after every change, and the maker can revise it
 and have those revisions **reconciled back into the plan**. `plan.json` stays the
 source of truth; the Markdown is how a human edits it.
 

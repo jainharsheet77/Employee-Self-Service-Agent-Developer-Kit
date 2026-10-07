@@ -108,14 +108,15 @@ diagnostics, never as a reason to refuse the plan.
 ## Push — publish a newly authored plan as one object
 
 **Publishing is automatic and mandatory, not optional.** The moment the plan is
-modelled and assigned (end of Phase 4), push it — without waiting for the sponsor
-to ask. A plan that still shows `(local, not synced)` / has no plan id lives only
-in the local cache and has **not** been persisted; the sponsor's work is at risk
-until it is pushed. Re-run this push after any later change the tools didn't
-already mirror.
+modelled with its roles **pooled** (end of Phase 3), push it — without waiting for
+the sponsor to ask, and without waiting to name people (naming is the Phase 4
+follow-up, after the plan is shown). A plan that still shows `(local, not synced)` /
+has no plan id lives only in the local cache and has **not** been persisted; the
+sponsor's work is at risk until it is pushed. Re-run this push after any later change
+the tools didn't already mirror.
 
-After you've built the plan locally through the phases (research → interview →
-model → assign), publish it in **one** create call rather than task-by-task:
+After you've built the plan locally through the modelling phase (research →
+interview → model), publish it in **one** create call rather than task-by-task:
 
 1. **Confirm whether this plan targets HR or IT — the only agent axis left.**
    The create body's `configuringAgentName` is required. The ESS agent ships as

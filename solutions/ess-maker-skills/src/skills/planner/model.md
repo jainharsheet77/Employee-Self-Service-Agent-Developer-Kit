@@ -170,7 +170,10 @@ python scripts/planner/cli.py capture-discover --complete
 
 (auto-detects the plan's discover task; `--dry-run` previews without saving.)
 
-When the tasks are in, show the summary and go to Phase 4.
+When the tasks are in, **publish the plan (roles pooled) and show it** (download
+link + checklist), then go to Phase 4 — **naming people to the pooled roles is a
+follow-up after the plan is shown**, not a pre-publish gate
+(`src/skills/planner/assign.md`).
 
 **Native connector vs. custom flow.** A "run `/connect`" task is only valid for a
 system ESS has a **native integration** for (Workday, ServiceNow HRSD/ITSM, SAP

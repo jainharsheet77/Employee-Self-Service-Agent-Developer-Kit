@@ -120,3 +120,9 @@ re-render at plan-authored time if the scope changed.
 
 The preview shows the bar early; the task does the real generation. Do not remove or
 duplicate the task — this preview precedes it.
+
+**Permissions.** This preview — and generating the golden prompts at planning time —
+needs no special Copilot Studio permission; whoever creates the plan does it. Running
+the real evals against the built agent later (the *Generate evaluation tests* task)
+requires Copilot Studio **Maker** access, and is testing-only — it doesn't write back
+to the plan.

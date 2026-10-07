@@ -240,11 +240,13 @@ the maker is satisfied.
 An import seeds **Phase 1–2** (research + interview); it does not skip the rest.
 Once the required gaps are filled and the proposed tasks are in, continue exactly
 as a new plan: **Phase 3** completes the *full* atomic task set grounded in the
-captured systems/scenarios (not just the tasks the upload happened to list),
-**Phase 4** assigns owners, the **eager eval preview** renders the golden prompts,
-and then you **publish to the shared planner** as Draft (`src/skills/planner/sync.md`)
-— a built plan is never left only in the local cache. From there, editing follows
-`edit.md`.
+captured systems/scenarios (not just the tasks the upload happened to list) with
+its roles **pooled**, the **eager eval preview** renders the golden prompts, and
+then you **publish to the shared planner** as Draft (`src/skills/planner/sync.md`)
+and **show the plan** — a built plan is never left only in the local cache.
+**Naming people to the pooled roles (Phase 4) and any further edits are follow-ups
+the maker opts into after the plan is shown** (`src/skills/planner/interview.md` →
+*After the plan is shown*); editing follows `edit.md`.
 
 Then tell the maker the **one next step** that unblocks the rollout — usually
 handing off to whoever owns setup:
