@@ -221,9 +221,10 @@ def cmd_add_scenario_dependency(args: argparse.Namespace) -> int:
 def cmd_check_deps(args: argparse.Namespace) -> int:
     plan = _load(args)
     status = plan.scenario_dependency_status()
+    gaps = plan.task_consume_gaps()
     if args.json:
         print(json.dumps(status, indent=2))
-        return 0
+        return 1 if gaps else 0
     met = [e for e in status if e.get("met")]
     unmet = [e for e in status if not e.get("met")]
     if met:
@@ -231,16 +232,24 @@ def cmd_check_deps(args: argparse.Namespace) -> int:
         for edge in met:
             print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}  [met]")
         print()
-    if not unmet:
-        print("No unmet scenario dependencies.")
-        return 0
-    print("Unmet scenario dependencies (advise the sponsor to add the prerequisite first):\n")
-    for edge in unmet:
-        print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}")
-        if edge.get("rationale"):
-            print(f"      why: {edge['rationale']}")
-        if edge.get("source"):
-            print(f"      source: {edge['source']}")
+    if unmet:
+        print("Unmet scenario dependencies (advise the sponsor to add the prerequisite first):\n")
+        for edge in unmet:
+            print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}")
+            if edge.get("rationale"):
+                print(f"      why: {edge['rationale']}")
+            if edge.get("source"):
+                print(f"      source: {edge['source']}")
+        print()
+    else:
+        print("No unmet scenario dependencies.\n")
+    if gaps:
+        print("Task-graph gaps (a task consumes something nothing on the plan produces):\n")
+        for gap in gaps:
+            print(f"  - {gap['task']} ({gap['title']}) needs '{gap['missing']}' — no task produces it")
+        print("\nRe-add the producer, or remove/repoint the consumer, then re-check.")
+        return 1
+    print("Task graph is coherent: every consumed output has a producer.")
     return 0
 
 
@@ -294,6 +303,18 @@ def cmd_remove_task(args: argparse.Namespace) -> int:
     plan.remove_task(args.id)
     _save(plan, args)
     print(f"Removed task {args.id!r}")
+    return 0
+
+
+def cmd_remove_context(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    try:
+        plan.remove_context(args.key)
+    except KeyError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    _save(plan, args)
+    print(f"Removed context {args.key!r}")
     return 0
 
 
@@ -844,6 +865,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--description")
     p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
     p.set_defaults(func=cmd_set_context)
+
+    p = sub.add_parser(
+        "remove-context",
+        help="remove a context entry by key (move a scenario/system/dependency out of scope)",
+    )
+    p.add_argument("--key", required=True,
+                   help="scenario id, 'system.<area>', or a 'A -> B' dependency key")
+    p.set_defaults(func=cmd_remove_context)
 
     p = sub.add_parser("add-scenario", help="register a scenario in scope")
     p.add_argument("--id", required=True, help="scenario id, e.g. hr-ticketing")

@@ -69,6 +69,37 @@ def test_update_and_remove_task_roundtrip(tmp_path):
     assert Plan.load(plan_path).task("T1") is None
 
 
+def test_remove_context_moves_a_scenario_out_of_scope(tmp_path):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-scenario", "--id", "hr-ticketing", "--label", "HR ticketing")
+    assert "hr-ticketing" in Plan.load(plan_path).in_scope_scenarios()
+    assert _run("--plan", plan_path, "remove-context", "--key", "hr-ticketing") == 0
+    assert "hr-ticketing" not in Plan.load(plan_path).in_scope_scenarios()
+    # A mistyped / unknown key fails loudly.
+    assert _run("--plan", plan_path, "remove-context", "--key", "nope") == 1
+
+
+def test_check_deps_flags_and_clears_a_dangling_consume(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    # A task consumes a key nothing on the plan produces (e.g. after a bad edit).
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Author HR topic",
+         "--role", "knowledge-admin", "--consumes", "workdayConnection")
+    rc = _run("--plan", plan_path, "check-deps")
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Task-graph gaps" in out
+    assert "workdayConnection" in out
+    # Re-adding the producer makes the graph coherent again.
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday",
+         "--role", "integration-owner", "--produces", "workdayConnection")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "check-deps")
+    assert rc == 0
+    assert "Task graph is coherent" in capsys.readouterr().out
+
+
 def test_full_flow(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     config_path = tmp_path / "config.json"

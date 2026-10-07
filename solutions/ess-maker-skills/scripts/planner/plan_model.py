@@ -690,6 +690,23 @@ class Plan:
             description=f"Target system for {area}", source=source,
         )
 
+    def remove_context(self, key: str) -> dict[str, Any]:
+        """Remove a context entry by key and return it — the primitive for moving
+        something **out of scope**. A scenario (``key`` = scenario id), a Systems
+        label (``key`` = ``system.<area>``), and a scenario-dependency edge
+        (``key`` = ``"<A> -> <B>"``) are all ordinary context entries, so one
+        command drops any of them. Raises ``KeyError`` if no entry has that key,
+        so a mistyped key fails loudly.
+
+        This only drops the scope entry; it does not remove the tasks modelled for
+        that scenario/system. The edit flow (``src/skills/planner/edit.md``)
+        removes that stream's tasks and re-checks coherence around this call."""
+        for entry in self.context:
+            if entry.get("key") == key:
+                self.context.remove(entry)
+                return entry
+        raise KeyError(f"no such context key: {key!r}")
+
     # ---- task mutators --------------------------------------------------- #
 
     def add_task(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -790,10 +807,17 @@ class Plan:
 
     def remove_task(self, task_id: str) -> dict[str, Any]:
         """Remove a task (reconciling a deletion from the Markdown view) and return
-        it. Raises ``KeyError`` on an unknown id so a mistyped id fails loudly
-        rather than silently doing nothing."""
+        it. Also drops the outputs **only this task produced** — once their single
+        producer is gone nothing can produce them, so leaving them would dangle
+        (``validate`` flags an output whose ``producedByTaskId`` is unknown). This
+        keeps the ledger coherent after an edit; any downstream task that still
+        consumes a dropped key then surfaces via :meth:`task_consume_gaps` for the
+        edit flow to repair. Raises ``KeyError`` on an unknown id so a mistyped id
+        fails loudly rather than silently doing nothing."""
         task = self._require_task(task_id)
         self.tasks.remove(task)
+        for art in [a for a in self.outputs if a.get("producedByTaskId") == task_id]:
+            self.outputs.remove(art)
         return task
 
     # ---- output ledger --------------------------------------------------- #
@@ -1076,6 +1100,27 @@ class Plan:
                 unmet.append(edge)
                 seen.add(pair)
         return unmet
+
+    def task_consume_gaps(self) -> list[dict[str, Any]]:
+        """Whole-plan task-graph coherence check: every key a task **consumes**
+        should be **produced** by some task on the plan (or already pinned as an
+        Active output). A consumed key with neither is a *dangling consume* — the
+        task is blocked forever, which after an edit usually means its producer
+        was removed (re-add it) or the consumer is now out of scope (remove it).
+
+        Returns one ``{"task", "title", "missing"}`` entry per gap, in task order.
+        Built on :meth:`blocking_inputs`, whose producer list is empty exactly
+        when no task produces the (still-unpinned) key — that empty list is the
+        dangling-consume signal."""
+        gaps: list[dict[str, Any]] = []
+        for task in self.tasks:
+            tid = task.get("id", "")
+            for key, producers in self.blocking_inputs(tid).items():
+                if not producers:
+                    gaps.append(
+                        {"task": tid, "title": task.get("title", ""), "missing": key}
+                    )
+        return gaps
 
     # ---- uploaded-plan ingestion & gap analysis ------------------------- #
 

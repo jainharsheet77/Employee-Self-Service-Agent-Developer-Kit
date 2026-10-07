@@ -16,6 +16,7 @@ import pytest
 from planner.plan_model import (
     Limits,
     Plan,
+    SCENARIO_GROUP,
     assignee_role_id,
     assignee_user_oid,
     context_entry,
@@ -235,6 +236,30 @@ def test_remove_task():
         plan.remove_task("T1")
 
 
+def test_remove_task_drops_the_outputs_it_produced():
+    # Removing a producer must not leave an output pointing at a deleted task
+    # (which validate would flag) — the ledger stays coherent automatically.
+    plan = _plan_with_tasks()
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.add_output(plan_artifact("evalSuite", "Custom", {"id": "s"}, produced_by_task_id="T2"))
+    plan.remove_task("T1")
+    assert plan.output("primaryEnvironment") is None  # T1's output is gone
+    assert [a["key"] for a in plan.outputs] == ["evalSuite"]  # T2's survives
+    assert not [e for e in plan.validate() if "unknown task" in e]
+
+
+def test_remove_context_moves_an_entry_out_of_scope():
+    plan = Plan.new()
+    plan.set_context("hr-ticketing", "HR ticketing", group=SCENARIO_GROUP)
+    assert "hr-ticketing" in plan.in_scope_scenarios()
+    removed = plan.remove_context("hr-ticketing")
+    assert removed["key"] == "hr-ticketing"
+    assert "hr-ticketing" not in plan.in_scope_scenarios()
+    # A mistyped / already-removed key fails loudly.
+    with pytest.raises(KeyError):
+        plan.remove_context("hr-ticketing")
+
+
 # --------------------------------------------------------------------------- #
 # Output ledger — supersede-by-key, filter-by-task
 # --------------------------------------------------------------------------- #
@@ -368,6 +393,26 @@ def test_waiting_on_marks_external_key_no_task_produces():
     assert plan.blocking_inputs("T1") == {"externalId": []}
     assert plan.waiting_on("T1") == ["needs externalId"]
     assert plan.dependency_marker("T1") == "needs externalId"
+
+
+def test_task_consume_gaps_flags_a_dangling_consume():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "Author HR topic", consumes=["workdayConnection"]))
+    # Nothing produces workdayConnection -> the task is blocked forever.
+    assert plan.task_consume_gaps() == [
+        {"task": "T1", "title": "Author HR topic", "missing": "workdayConnection"}
+    ]
+    # Re-add the producer (e.g. after an edit) -> the gap clears.
+    plan.add_task(new_task("T2", "Connect Workday", produces=["workdayConnection"]))
+    assert plan.task_consume_gaps() == []
+
+
+def test_task_consume_gaps_ignores_keys_already_pinned_as_active_outputs():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    # No producer task, but the key is already pinned Active -> not a gap.
+    plan.add_output(plan_artifact("envId", "Environment", {"environmentId": "e"}, produced_by_task_id="T2"))
+    assert plan.task_consume_gaps() == []
 
 
 def test_dependency_marker_dedupes_and_sorts_producers():
