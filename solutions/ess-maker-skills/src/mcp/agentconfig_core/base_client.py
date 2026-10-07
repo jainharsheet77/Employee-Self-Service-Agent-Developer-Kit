@@ -51,9 +51,11 @@ _AUTHORITY = "https://login.microsoftonline.com/organizations"
 _CORE_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOCAL_STATE_DIR = os.path.join(_CORE_DIR, ".local")
 _TOKEN_CACHE_PATH = os.path.join(_LOCAL_STATE_DIR, "msal_token_cache.bin")
-# How many times a single request may re-authenticate after a 401 before giving
-# up: one silent force-refresh, then one explicit interactive sign-in.
-_MAX_REAUTH_ATTEMPTS = 2
+# How many times a single request may silently re-authenticate after a 401 before
+# giving up: one silent force-refresh + replay. A still-401 after that is an access
+# problem a browser can't fix, so it is surfaced and planning falls back to local.
+# The only interactive sign-in is the initial one at startup, never mid-request.
+_MAX_REAUTH_ATTEMPTS = 1
 
 
 class AgentConfigApiError(RuntimeError):
@@ -183,15 +185,18 @@ def acquire_token_msal_interactive() -> str:
     return result["access_token"]
 
 
-def acquire_token_msal_refreshed(*, force_interactive: bool = False) -> str:
-    """Re-acquire a delegated AgentConfiguration token after a 401.
+def acquire_token_msal_refreshed() -> Optional[str]:
+    """Silently refresh a delegated AgentConfiguration token after a 401.
 
-    Unless ``force_interactive``, first force-refresh silently
-    (``force_refresh=True`` bypasses the cached — now server-rejected — access
-    token and spends the refresh token, no browser). Fall back to an interactive
-    sign-in when the refresh token is gone, interaction is required, or
-    ``force_interactive`` is set — that interactive prompt is the explicit login
-    the user is asked for before the planner can progress past a dead session.
+    Spends the cached refresh token (``force_refresh=True`` bypasses the
+    now-server-rejected access token) with **no interactive prompt** — the same
+    renewal restarting the MCP process performs, but in place. Returns the new
+    access token, or ``None`` when there is no signed-in account or the refresh
+    token is gone/expired (interaction would be required). ``None`` tells the 401
+    handler the session cannot be mended in-process, so it surfaces an explicit
+    sign-in error and planning falls back to local — the core never opens a browser
+    mid-request. The only interactive sign-in is the initial one at startup
+    (:func:`acquire_token_msal_interactive`).
     """
     import msal
 
@@ -202,21 +207,13 @@ def acquire_token_msal_refreshed(*, force_interactive: bool = False) -> str:
         token_cache=cache,
     )
 
-    result = None
-    if not force_interactive:
-        accounts = app.get_accounts()
-        if accounts:
-            result = app.acquire_token_silent(
-                _SCOPE, account=accounts[0], force_refresh=True
-            )
-    if not result or "access_token" not in result:
-        result = _acquire_token_interactive_form_post(app)
-
+    accounts = app.get_accounts()
+    if not accounts:
+        return None
+    result = app.acquire_token_silent(_SCOPE, account=accounts[0], force_refresh=True)
     _save_msal_cache(cache)
-    if "access_token" not in result:
-        error = result.get("error", "unknown_error")
-        description = result.get("error_description", "")
-        raise ValueError(f"MSAL sign-in failed ({error}): {description}")
+    if not result or "access_token" not in result:
+        return None
     return result["access_token"]
 
 
@@ -420,16 +417,17 @@ class AgentConfigBaseClient:
         by :meth:`_reauthenticate`); subclasses override to refresh their own —
         e.g. the planner's caller ``oid``."""
 
-    def _acquire_refreshed_token(self, force_interactive: bool) -> Optional[str]:
+    def _acquire_refreshed_token(self) -> Optional[str]:
         """Blocking token re-acquisition behind :meth:`_reauthenticate` (run in a
-        worker thread). An ``msal`` token is force-refreshed, escalating to an
-        interactive sign-in when the refresh token is gone; a token injected via
-        ``AGENTCONFIG_ACCESS_TOKEN`` is fixed for the process so this returns
-        ``None``; a token *file* is re-read in case an external broker rotated it,
-        returning ``None`` when it is unchanged or unreadable. ``None`` tells the
-        caller re-auth is impossible so it surfaces an explicit sign-in error."""
+        worker thread). An ``msal`` token is **silently** force-refreshed; a token
+        injected via ``AGENTCONFIG_ACCESS_TOKEN`` is fixed for the process so this
+        returns ``None``; a token *file* is re-read in case an external broker
+        rotated it, returning ``None`` when it is unchanged or unreadable. ``None``
+        tells the caller re-auth is impossible so it surfaces an explicit sign-in
+        error. Never opens a browser — the only interactive sign-in is the initial
+        one at startup."""
         if self._token_source == "msal":
-            return acquire_token_msal_refreshed(force_interactive=force_interactive)
+            return acquire_token_msal_refreshed()
         if self._token_source == "file":
             path = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
             try:
@@ -438,25 +436,23 @@ class AgentConfigBaseClient:
                 return None
         return None
 
-    async def _reauthenticate(self, *, force_interactive: bool, seen_token: str) -> bool:
-        """Recover from a 401 by replacing the expired/revoked bearer and rebuilding
-        the session so the retry carries a live token.
+    async def _reauthenticate(self, *, seen_token: str) -> bool:
+        """Recover from a 401 by **silently** replacing the expired/revoked bearer
+        and rebuilding the session so the replay carries a live token.
 
-        Returns ``True`` when a usable new token is in place — obtained here, or
-        already refreshed by a concurrent caller — and ``False`` when the token was
-        injected out-of-band (env var / file) and cannot be renewed in-process, so
-        the caller surfaces an explicit sign-in error. Serialized on
-        :attr:`_auth_lock` so a burst of concurrent 401s triggers at most one
-        sign-in; the blocking acquisition runs in a thread so it never stalls the
-        event loop (the interactive flow can wait minutes on the browser)."""
+        Returns ``True`` when a usable new token is in place — refreshed here, or
+        already refreshed by a concurrent caller — and ``False`` when no fresh token
+        could be obtained silently (an env/file token that cannot be renewed
+        in-process, or an msal refresh token that is gone), so the caller surfaces an
+        explicit sign-in error. Serialized on :attr:`_auth_lock` so a burst of
+        concurrent 401s refreshes at most once; the blocking acquisition runs in a
+        thread so it never stalls the event loop."""
         async with self._auth_lock:
             if self._token != seen_token:
                 # A concurrent caller already refreshed while we waited on the lock.
                 return True
             loop = asyncio.get_running_loop()
-            new_token = await loop.run_in_executor(
-                None, self._acquire_refreshed_token, force_interactive
-            )
+            new_token = await loop.run_in_executor(None, self._acquire_refreshed_token)
             if not new_token or new_token == self._token:
                 return False
             self._token = new_token
@@ -464,6 +460,33 @@ class AgentConfigBaseClient:
             self._on_token_refreshed()
             await self._reset_client()
             return True
+
+    def _format_401_error(self) -> str:
+        """Honest 401 message — the recovery actually attempted depends on the token
+        source. An ``msal`` token was silently force-refreshed in place and still
+        rejected (likely an access problem a browser can't fix); an ``env``/``file``
+        token is injected out-of-band and was never refreshed here. No browser is
+        opened mid-request, so the message never claims an interactive sign-in ran."""
+        if self._token_source == "msal":
+            return (
+                "Unauthorized (HTTP 401): the AgentConfiguration session expired or "
+                "was revoked and a silent token refresh did not clear it — the "
+                "account may not have access to the shared plan. Sign in again with "
+                "a work account that does (restart the MCP server to re-run the "
+                "initial sign-in); meanwhile planning continues locally and syncs on "
+                "the next successful call."
+            )
+        source_env = (
+            "AGENTCONFIG_ACCESS_TOKEN_FILE"
+            if self._token_source == "file"
+            else "AGENTCONFIG_ACCESS_TOKEN"
+        )
+        return (
+            "Unauthorized (HTTP 401): the AgentConfiguration token was rejected and "
+            f"it was injected out-of-band ({source_env}), so it cannot be refreshed "
+            "in-process. Provide a fresh token and sign in again; meanwhile planning "
+            "continues locally and syncs on the next successful call."
+        )
 
     async def _request(
         self,
@@ -495,10 +518,12 @@ class AgentConfigBaseClient:
         A **401** is handled separately from the transient codes: a stale or
         revoked bearer makes every call fail with the *same* dead token (the
         session caches it), so a plain retry can never clear it. The request
-        re-authenticates in place — one silent force-refresh, then an explicit
-        interactive sign-in — and replays once. When the token was injected
-        out-of-band (env var / file) and cannot be renewed in-process, the call
-        surfaces an explicit "sign in again" error instead of looping on 401s.
+        silently force-refreshes the token in place — the same renewal a process
+        restart would perform — and replays once, on a budget independent of the
+        transient-retry attempts above. When the token cannot be renewed in-process
+        (an out-of-band env var / file token, or an msal refresh token that is gone)
+        the call surfaces an explicit "sign in again" error instead of looping on
+        401s; no browser is ever opened mid-request.
         """
         # Default to retry-safe so the landing-page surface keeps its original
         # retry-on-transient behavior; only call sites that would genuinely
@@ -511,23 +536,25 @@ class AgentConfigBaseClient:
             request_token = self._token
             try:
                 response = await client.request(method, path, **kwargs)
+                # A 401 recovers on a budget of its own, independent of the
+                # transient-retry attempts: silently force-refresh the dead bearer
+                # (what a process restart did) and replay immediately, so a 401 that
+                # lands after some transient retries still gets its full refresh
+                # budget. No browser is opened here — only the initial startup
+                # sign-in is interactive.
+                while (
+                    response.status_code == 401
+                    and reauth_attempts < _MAX_REAUTH_ATTEMPTS
+                ):
+                    if not await self._reauthenticate(seen_token=request_token):
+                        break
+                    reauth_attempts += 1
+                    client = await self._ensure_client()
+                    request_token = self._token
+                    response = await client.request(method, path, **kwargs)
                 if response.status_code == 401:
-                    if reauth_attempts < _MAX_REAUTH_ATTEMPTS and (
-                        await self._reauthenticate(
-                            force_interactive=reauth_attempts >= 1,
-                            seen_token=request_token,
-                        )
-                    ):
-                        reauth_attempts += 1
-                        continue
                     raise AgentConfigApiError(
-                        "Unauthorized (HTTP 401): the AgentConfiguration session "
-                        "expired or was revoked, and the browser sign-in the tool "
-                        "already opened did not clear it — the account may not have "
-                        "access to the shared plan. You may need to sign in again "
-                        "with a work account that does; meanwhile planning continues "
-                        "locally and syncs on the next successful call.",
-                        http_status=401,
+                        self._format_401_error(), http_status=401
                     )
                 if response.status_code == 429 or response.status_code in (
                     502,

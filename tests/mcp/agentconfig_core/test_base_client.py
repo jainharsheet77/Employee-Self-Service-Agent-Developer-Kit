@@ -77,10 +77,9 @@ def test_interactive_auth_always_prompts_for_account_selection(monkeypatch) -> N
     assert captured["prompt"] == "select_account"
 
 
-def test_refreshed_token_forces_silent_refresh_before_interactive(monkeypatch) -> None:
-    # After a 401, the silent attempt must bypass the cached (now server-rejected)
-    # access token via force_refresh=True; when the refresh token is gone it
-    # escalates to the interactive sign-in.
+def test_refreshed_token_force_refreshes_silently(monkeypatch) -> None:
+    # After a 401, the refresh bypasses the cached (now server-rejected) access
+    # token via force_refresh=True and returns the new token WITHOUT any browser.
     import sys
     import types
 
@@ -93,7 +92,7 @@ def test_refreshed_token_forces_silent_refresh_before_interactive(monkeypatch) -
 
         def acquire_token_silent(self, scopes, account=None, force_refresh=False):
             self.silent = {"account": account, "force_refresh": force_refresh}
-            return None  # refresh token gone -> fall through to interactive
+            return {"access_token": "refreshed-token"}
 
     fake_app = FakeApp()
     monkeypatch.setitem(
@@ -103,27 +102,29 @@ def test_refreshed_token_forces_silent_refresh_before_interactive(monkeypatch) -
     )
     monkeypatch.setattr(base_client, "_load_msal_cache", lambda: object())
     monkeypatch.setattr(base_client, "_save_msal_cache", lambda cache: None)
-    monkeypatch.setattr(
-        base_client,
-        "_acquire_token_interactive_form_post",
-        lambda app: {"access_token": "interactive-token"},
-    )
 
     token = base_client.acquire_token_msal_refreshed()
 
-    assert token == "interactive-token"
+    assert token == "refreshed-token"
     assert fake_app.silent == {"account": "account", "force_refresh": True}
 
 
-def test_refreshed_token_force_interactive_skips_the_cache(monkeypatch) -> None:
-    # The explicit login path never consults the silent cache — it goes straight to
-    # the interactive sign-in the user is asked for.
+def test_refreshed_token_returns_none_without_browser_when_refresh_gone(monkeypatch) -> None:
+    # Silent-only: when the refresh token is gone (interaction required), the refresh
+    # returns None instead of opening a browser mid-request — the 401 handler turns
+    # that into an explicit sign-in error.
     import sys
     import types
 
     class FakeApp:
-        def get_accounts(self):
-            raise AssertionError("force_interactive must not consult the token cache")
+        def get_accounts(self) -> list[str]:
+            return ["account"]
+
+        def acquire_token_silent(self, scopes, account=None, force_refresh=False):
+            return None  # refresh token gone / interaction required
+
+    def _no_browser(app):
+        raise AssertionError("silent refresh must not open a browser")
 
     monkeypatch.setitem(
         sys.modules,
@@ -132,16 +133,29 @@ def test_refreshed_token_force_interactive_skips_the_cache(monkeypatch) -> None:
     )
     monkeypatch.setattr(base_client, "_load_msal_cache", lambda: object())
     monkeypatch.setattr(base_client, "_save_msal_cache", lambda cache: None)
-    monkeypatch.setattr(
-        base_client,
-        "_acquire_token_interactive_form_post",
-        lambda app: {"access_token": "explicit-login"},
-    )
+    monkeypatch.setattr(base_client, "_acquire_token_interactive_form_post", _no_browser)
 
-    assert (
-        base_client.acquire_token_msal_refreshed(force_interactive=True)
-        == "explicit-login"
+    assert base_client.acquire_token_msal_refreshed() is None
+
+
+def test_refreshed_token_returns_none_when_no_account(monkeypatch) -> None:
+    # No signed-in account at all -> nothing to refresh -> None, no browser.
+    import sys
+    import types
+
+    class FakeApp:
+        def get_accounts(self) -> list[str]:
+            return []
+
+    monkeypatch.setitem(
+        sys.modules,
+        "msal",
+        types.SimpleNamespace(PublicClientApplication=lambda *a, **k: FakeApp()),
     )
+    monkeypatch.setattr(base_client, "_load_msal_cache", lambda: object())
+    monkeypatch.setattr(base_client, "_save_msal_cache", lambda cache: None)
+
+    assert base_client.acquire_token_msal_refreshed() is None
 
 
 def test_resolve_token_reports_source(monkeypatch) -> None:

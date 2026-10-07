@@ -1025,10 +1025,11 @@ def test_401_with_msal_token_silently_refreshes_and_replays(monkeypatch) -> None
     monkeypatch.setattr(
         base_client_module, "acquire_token_msal_interactive", lambda: stale
     )
-    forced: list[bool] = []
+    refreshes = 0
 
-    def _refresh(*, force_interactive: bool = False) -> str:
-        forced.append(force_interactive)
+    def _refresh() -> str:
+        nonlocal refreshes
+        refreshes += 1
         return fresh
 
     monkeypatch.setattr(base_client_module, "acquire_token_msal_refreshed", _refresh)
@@ -1046,18 +1047,18 @@ def test_401_with_msal_token_silently_refreshes_and_replays(monkeypatch) -> None
     result = _run(client, lambda: client.list_project_plan_tasks("proj1", "plan1"))
 
     assert result == {"value": []}
-    assert forced == [False]  # silent refresh first, never a forced browser prompt
+    assert refreshes == 1  # one silent refresh, never a browser prompt
     assert len(seen) == 2
     assert seen[0].endswith(stale) and seen[1].endswith(fresh)
     assert client._caller_object_id == CALLER_OID  # oid re-derived from the new token
 
 
-def test_401_persisting_after_refresh_escalates_to_interactive_then_errors(
+def test_401_persisting_after_silent_refresh_surfaces_signin_error(
     monkeypatch,
 ) -> None:
-    # The refreshed token is ALSO rejected: the second recovery forces an explicit
-    # interactive sign-in, and when even that keeps 401-ing the call stops with the
-    # explicit sign-in error rather than looping forever.
+    # The refreshed token is ALSO rejected: silent-only recovery never loops or opens
+    # a browser — after one silent refresh + replay the call stops with the explicit
+    # sign-in error.
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN", raising=False)
     monkeypatch.delenv("AGENTCONFIG_ACCESS_TOKEN_FILE", raising=False)
     monkeypatch.delenv("AGENTCONFIG_PROJECTS_BASE_URL", raising=False)
@@ -1066,11 +1067,9 @@ def test_401_persisting_after_refresh_escalates_to_interactive_then_errors(
         "acquire_token_msal_interactive",
         lambda: _token_variant("stale"),
     )
-    forced: list[bool] = []
     counter = iter(range(1, 99))
 
-    def _refresh(*, force_interactive: bool = False) -> str:
-        forced.append(force_interactive)
+    def _refresh() -> str:
         return _token_variant(f"t{next(counter)}")
 
     monkeypatch.setattr(base_client_module, "acquire_token_msal_refreshed", _refresh)
@@ -1087,5 +1086,4 @@ def test_401_persisting_after_refresh_escalates_to_interactive_then_errors(
 
     assert excinfo.value.http_status == 401
     assert "sign in again" in str(excinfo.value).lower()
-    assert forced == [False, True]  # silent refresh, then an explicit interactive login
-    assert len(seen) == 3  # original + two replays, bounded (no infinite 401 loop)
+    assert len(seen) == 2  # original + one silent replay, bounded (no infinite loop)
