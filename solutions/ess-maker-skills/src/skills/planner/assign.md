@@ -1,7 +1,18 @@
-# Planner — Phase 4: Assign each Task (Flow 1)
+# Planner — Phase 4: Assign each Task (Flow 1) — a follow-up after the plan is shown
 
-The role for each Task is already grounded from the Learn docs (Phase 3). The
-sponsor's only job here is to pick **who** does it. For each Task:
+**Default to pooled; don't interview per task.** By the time you get here the plan
+is modelled with every Task grounded to a role. **Do not** walk the sponsor through a
+per-task "who does this?" questionnaire before they've seen the plan — that's the
+over-interrogation the flow avoids. Instead, **pool every Task to its grounded role**
+(automatic, no questions), publish, and **show the plan** (download link + checklist).
+Naming people to those roles is a **follow-up the sponsor opts into** — suggested in
+one short line after the plan is shown (`src/skills/planner/interview.md` → *After the
+plan is shown*), never a blocking question you fire and never run before the sponsor
+asks. Leaving every role pooled is a complete, valid end state.
+
+When the sponsor asks to assign (now or later), the role for each Task is already
+grounded from the Learn docs (Phase 3) — their only job is to pick **who**. For each
+role they want to name:
 
 1. **State the role** (don't ask for it): "This task is a `{role}` task."
 2. **List the people who hold that role.** The roles source is a separate,
@@ -35,23 +46,27 @@ may take the setup Task themselves. That's a convenience, not a rule — assign 
 whoever actually holds the role; a different admin running the Task produces the
 same result and the same capture (Phase 6).
 
-When every Task is assigned or pooled, show the summary. (The eval **preview** was
-already rendered eagerly during the interview — Phase 5, `src/skills/planner/evaluate.md`;
-re-render it here if the scope changed. It is render-only and generates nothing.)
+Pool every Task to its grounded role, then **show the summary**. (The eval
+**preview** was already rendered eagerly during the interview — Phase 5,
+`src/skills/planner/evaluate.md`; re-render it here if the scope changed. It is
+render-only and generates nothing.)
 
-**Then persist the plan — automatically, the instant assignment is done.**
-Finishing assignment is the trigger to publish; do not wait for the sponsor to
-ask. The plan they just approved lives only in the local cache until you push it,
-so **immediately** follow `src/skills/planner/sync.md` → *Push* now (name the
-configuring agent → `export-remote-plan` → `create_project_plan` → re-hydrate).
-That publishes the plan as **Draft** (with its assignees baked in) and shows it
-back for review. A Draft's tasks are read-only until it's **Active**, and the
-backend never auto-activates — so once the sponsor has reviewed it, **ask them to
-activate** the plan to put the assigned work in motion (see `sync.md` steps 5–6).
-Never leave a freshly built plan local. If the service is unreachable,
-fall back to the local cache and carry on (never mention any of this to the
-sponsor), and push on a later turn once it's reachable — a summary that still
-shows the plan as `(local, not synced)` has **not** been persisted.
+**Persist the plan automatically — the instant the task set is modelled and pooled,
+not after a naming interview.** Publishing is the trigger that follows *modelling*,
+not person-assignment; do not wait for the sponsor to name anyone. Follow
+`src/skills/planner/sync.md` → *Push* now (name the configuring agent →
+`export-remote-plan` → `create_project_plan` → re-hydrate). That publishes the plan
+as **Draft** (roles pooled) and shows it back for review. **Naming people to the
+pooled roles is the follow-up** — route it through the roles attestation flow
+(`src/skills/roles/nudge.md` → `src/skills/roles/resolve-person.md` →
+`src/skills/roles/attest.md`), which records each person as holding their role for
+the plan (a create — no re-publish needed). A Draft's tasks are read-only until it's
+**Active**, and the backend never auto-activates — so once the sponsor is happy,
+**ask them to activate** the plan to put the work in motion (see `sync.md` steps
+5–6). Never leave a freshly built plan local. If the service is unreachable, fall
+back to the local cache and carry on (never mention any of this to the sponsor), and
+push on a later turn once it's reachable — a summary that still shows the plan as
+`(local, not synced)` has **not** been persisted.
 
 The Plan is ready to run: each assignee runs the Task's skill (or does the
 manual/portal step), and you capture what it produced in Phase 6.

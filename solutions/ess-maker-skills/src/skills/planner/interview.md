@@ -1,16 +1,35 @@
 # Planner — Phase 2: Interview (grounded slot-filling)
 
 Ask the **fewest questions** that let you commit a buildable, scoped, assigned
-Plan. Research (Phase 1) already proposed candidate scenarios, prerequisites,
-and roles — so **propose, don't interrogate**, and only ask about a slot when
-research didn't answer it. Batch by theme, one theme at a time, and stop early.
+Plan — then **generate the plan from sensible defaults and let the sponsor edit
+it**, rather than interrogating every slot up front. Research (Phase 1) already
+proposed candidate scenarios, prerequisites, and roles — so **propose, don't
+interrogate**.
 
-**Frontload the goals.** Lead with what success looks like and the handful of
-scenarios employees actually ask about, so you can **render the golden-prompt
-preview within the first couple of turns** — the acceptance bar, up front — then
-iterate the tech stack (systems, connectors, dependencies) right after. Goals are
-the non-negotiable; the systems behind them can be refined once the sponsor has
-seen the bar.
+**The question budget: three short turns, then build.** Only three things are
+worth asking before you generate a plan — ask each as one batched turn, then stop
+and build:
+
+1. **Goal + success** (one sentence).
+2. **Scenarios** — the jobs employees self-serve, and (lightly) what's off the table.
+3. **The system behind each scenario area.**
+
+**Everything else is assumed, not asked.** Persona, market/wave, the success
+*measure*, the acceptance bar, and the *per-scenario detail within a category*
+(e.g. which Workday fields an employee can view or update) are **defaulted** from
+the catalogue and sensible norms, stated in one readback line, written onto the
+plan as editable assumptions (`--source Agent`), and surfaced as **follow-up edit
+options** once the sponsor has seen the plan and the eval preview. Do **not** turn
+any of them into an interview question. Asking the sponsor to hand-pick Workday
+view/update fields — or to name a deflection % and a done-bar — before they've seen
+a plan is exactly the over-interrogation this flow exists to avoid: a sponsor who
+wants something different edits it on the plan.
+
+**Frontload the goals, render the bar early.** Lead with what success looks like
+and the handful of scenarios employees actually ask about, so you can **render the
+golden-prompt preview within the first couple of turns** — the acceptance bar, up
+front — then pin the systems right after. Goals are the non-negotiable; the systems
+behind them can be refined once the sponsor has seen the bar.
 
 Every intent answer is stored as a **context entry** (grouped), via:
 
@@ -39,13 +58,29 @@ ticketing) they may have wanted.
 
 | # | Ask | Store as |
 |---|-----|----------|
-| 1 | **Goal + success, together.** "In one sentence — what should this agent do, and for whom? And what does success look like — fewer support tickets, faster policy answers, or something else?" (The success half seeds the measure in Q6.) | `set-context --group objective` |
+| 1 | **Goal + success, together.** "In one sentence — what should this agent do, and for whom? And what does success look like — fewer support tickets, faster policy answers, or something else?" (The success half seeds the default success measure below — you won't ask for it separately.) | `set-context --group objective` |
 | 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "Which 2–3 things do employees ask about most?" (e.g. *"How many vacation days do I have?"*, *"Reset my password"*, *"Update my phone number"*) — then widen: "Which scenarios are you thinking about beyond that?" To prioritise, offer a starting point: "Pick a focus — HR or IT — and expand from there. Where do employees feel the most friction today?" Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
 | 3 | **System per scenario — only after scenarios are captured.** "For **{scenario/area}**, which system holds the data?" — ground the options in the ESS native integrations from Phase‑1 research (Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors); SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
-| 4 | "Employees only, or managers too?" | `set-context --group scenarioContext` (key `persona`) |
-| 5 | "Rolling out to a specific market or wave first (e.g. India, a pilot group)?" | `set-context --group market` |
-| 6 | "What business outcome measures success (e.g. deflect 30% of HR tickets)?" — tie it back to the success picture from Q1. | `set-context --group businessGoals` |
-| 7 | "How will you know a scenario is done — pilot‑ready? production‑signed‑off?" | `set-context --group acceptanceCriteria` |
+
+That is the whole interview before you build. **Don't ask a fourth kind of
+question** — default the rest and let the sponsor edit it on the generated plan.
+
+### Assume these — never ask them up front
+
+For each, use the sponsor's own words if Q1–Q3 already answered it (keep
+`--source User`); otherwise default it **silently**, mark it `--source Agent`, state
+it in the one-line readback, and expose it as a follow-up edit (below):
+
+| Slot | Default (unless the goal already said otherwise) | Store as |
+|------|-----|----------|
+| **Persona** | Employees only (managers deferred) | `set-context --group scenarioContext` (key `persona`) |
+| **Market / wave** | Whatever market the sponsor already named (a city/pilot group); else "no specific wave" | `set-context --group market` |
+| **Success measure** | A clearly-labeled target tied to the Q1 success picture (e.g. *"deflect ~30% of HR tickets"*), marked as an assumption to adjust | `set-context --group businessGoals` |
+| **Acceptance bar** | "Pilot-ready — configured, tested, ready for a controlled pilot" | `set-context --group acceptanceCriteria` |
+| **Enabled scenarios per category** | The **full OOB named-scenario set** for each in-scope category from the catalogue (below) — not a hand-picked subset | `set-context --group scenarioCapability` |
+
+The sponsor first sees a **complete plan + acceptance bar**, then adjusts — instead
+of answering a questionnaire to produce one.
 
 **The catalogue IS the grounded scenario set — map the goal to it, don't invent.**
 The categories above come from `scenario_catalogue.md`; use them to help the maker
@@ -97,14 +132,18 @@ each scenario** are **mandatory**. Capture scenarios *before* systems — never 
 a system choice narrow the scenario set. These determine the connect tasks, the
 authoring tasks, and which Learn docs ground the roles. Do not skip them, and do
 not end the interview (or jump to sponsor/timeframe) until scenarios and their
-systems are captured. Ask 4–7 as scope warrants.
+systems are captured. Everything beyond these three (persona, market, success
+measure, acceptance bar, and the per-category detail) is **defaulted, not asked** —
+see *Assume these* above; the sponsor edits it on the generated plan.
 
 Use scalar values (one fact per entry); group related facts rather than nesting.
 
-**Capture what's off the table — early.** Right after the scenarios, ask
-"Anything off the table for now — like write-backs, escalations, or manager
-scenarios?" and record the boundary so both the golden-prompt preview and the plan
-respect it (the eval **drops** out-of-scope work — `src/skills/planner/evaluate.md`):
+**Capture what's off the table — only if they said so.** Q2 already invites this
+("anything off the table for now?"). If the sponsor named a boundary (write-backs,
+escalations, manager scenarios), record it so both the golden-prompt preview and
+the plan respect it (the eval **drops** out-of-scope work —
+`src/skills/planner/evaluate.md`). If they didn't, default to none and move on; they
+can add a boundary on the plan later:
 
 ```
 python scripts/planner/cli.py set-context --key outOfScope --value "No manager scenarios; no write-backs this wave" --group scenarioContext --description "Explicitly out of scope for this wave" --source User
@@ -148,20 +187,27 @@ python scripts/planner/cli.py add-scenario-dependency --scenario hr-ticketing --
 Dependencies show up in the summary with a met / MISSING status and flow into task
 sequencing (the knowledge task produces what the ticketing work consumes).
 
-## Capture the enabled scenarios per category — the eval reads these off the plan
+## Enabled scenarios per category — default the full OOB set (don't ask field-by-field)
 
 Registering a category (`hr-ticketing`) records the **area**, but not *what it
 enables*. The eval (Phase 5, `src/skills/planner/evaluate.md`) reads scenarios
 **off the plan** to write golden prompts — and "HR ticketing" alone isn't enough to
 generate topic-level prompts (create a ticket, check a case). So for each in-scope
-category, capture the **named scenarios it enables** onto the plan.
+category, capture the **named scenarios it enables** onto the plan — by **defaulting
+to the catalogue's full OOB named-scenario set** for that category, not by asking the
+sponsor to hand-pick fields or operations.
 
-**Ground them — don't invent.** The source is the catalogue's **Named scenarios**
-list per category (`scenario_catalogue.md` → *Named scenarios*), confirmed/refined
-against Microsoft Learn for the chosen connector. E.g. **HR Ticketing (#32-34)**
-enables *Read HR tickets*, *Create HR ticket*, *Update HR case*. Show the editor
-what each in-scope category enables, confirm, then capture each enabled scenario as
-a Context entry (group `scenarioCapability`, key `<category>.<slug>`):
+**Ground them — don't invent, don't interrogate.** The source is the catalogue's
+**Named scenarios** list per category (`scenario_catalogue.md` → *Named scenarios*),
+confirmed/refined against Microsoft Learn for the chosen connector. E.g. **HR
+Ticketing (#32-34)** enables *Read HR tickets*, *Create HR ticket*, *Update HR
+case*; **HR Profile read** enables that connector's standard profile fields (on
+Workday: core job details, employment & contact, compensation), **HR Profile write**
+its standard editable fields (e.g. personal email, phone). Capture the **whole** OOB
+set for each in-scope category as Context entries — do **not** ask the sponsor which
+fields or which operations are in scope. They see the full set on the plan and in
+the eval preview and **trim it there** if they want less (group `scenarioCapability`,
+key `<category>.<slug>`):
 
 ```
 python scripts/planner/cli.py set-context --key hr-ticketing.create-ticket --value "Create HR ticket" --group scenarioCapability --description "OOB HR Ticketing scenario (ESS catalogue #32-34)" --source Agent
@@ -169,7 +215,8 @@ python scripts/planner/cli.py set-context --key hr-ticketing.read-ticket   --val
 ```
 
 **OOB vs extensible.** Capture the **OOB** named scenarios from the catalogue for
-each in-scope category. Capture an **extensible** scenario (e.g. Request Time Off,
+each in-scope category **by default — without asking the sponsor to pick**. Capture
+an **extensible** scenario (e.g. Request Time Off,
 or a Workday pay/payslip specific) **only if the editor explicitly pins it** — and
 then label it as extensible/custom, grounded from Learn per the connector; never
 fold it into the OOB set and never invent one. Per-scenario *setup* detail (fields,
@@ -206,14 +253,62 @@ built around: goals first, the bar rendered early, then systems and dependencies
 captured right after. Rendering the bar does **not** wait for every system to be
 pinned — scenarios + goals are enough to show what "good" looks like.
 
-## Stop condition — both satisfied
+## After the plan is shown — stop, and suggest the follow-ups (don't run them)
 
-- **Sponsor-satisfied:** they've seen the proposed scenario list + goals and
-  accepted them.
+**Showing the plan is the end of the turn.** Once the plan is modelled, published,
+and presented (the download link **then** the grouped task checklist — `SKILL.md` →
+*Building the plan*), **stop there**. Do **not**:
+
+- fire a blocking "What would you like to do next?" question (no `ask_user`, no
+  numbered menu) — the plan the sponsor just received is the deliverable, not a
+  prompt for more input;
+- start assigning roles, open the edit round-trip, or run any other follow-up on
+  your own. The pooled plan is complete as-is.
+
+Instead, close with **one short suggestion line** — plain language, no form — naming
+what the sponsor can do next, phrased as an invitation they can take or ignore. Model
+it on the kit's style:
+
+> Your plan's saved and ready to download above. Whenever you like, you can put names
+> to the pooled roles or tweak the scope and assumptions — just say the word.
+
+Then **end the turn.** Act on a follow-up **only when the sponsor replies asking for
+it** in a later turn:
+
+1. **Assign roles to people.** The plan ships with every task grounded to a **role**
+   but **pooled** — no named owners yet. If (and only if) the sponsor asks, run
+   Phase 4 (`src/skills/planner/assign.md`) / the roles attestation flow
+   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Otherwise the roles
+   stay pooled — that's a complete, valid state, not a gap to chase.
+2. **Edit the plan / its assumptions.** The measure, acceptance bar, persona, and
+   per-category detail were **assumed**, so they're trivial to change on request.
+   When the sponsor asks for a change — scope (add/drop a scenario category, or trim
+   the enabled scenarios, e.g. "only let employees update phone, not email"), the
+   system behind an area, the success measure (20% vs 30% deflection), the acceptance
+   bar (pilot-ready vs production-signed-off), or persona/market (include managers,
+   change the wave) — apply it through the edit round-trip
+   (`src/skills/planner/edit.md`): state it as context/scenario edits, re-render, and
+   re-show the plan (and, if scope changed, re-render the eval preview).
+
+This "generate, show, then refine/assign **only when asked**" loop is what replaces
+front-loaded interrogation — the suggestion invites the sponsor; it never interrogates
+them.
+
+## Stop condition — enough to generate, then edit
+
+You have enough to **generate** the plan as soon as **objective + scenarios + a
+system per scenario** are captured. Don't keep interviewing for the defaulted slots —
+generate the plan, render the eval preview, and present both; the sponsor then
+assigns roles or **edits** from there (the follow-ups above).
+
 - **ADK-satisfied:** every in-scope scenario maps to a grounded, supported
-  capability; every prerequisite has a Task; and every Task will be either
-  assigned to a person or pooled to a role.
+  capability; every prerequisite has a Task; and every Task is grounded to a role
+  (assigned to a person later, or pooled for now).
+- **Sponsor-in-control:** the sponsor sees the full plan + the acceptance bar and
+  can assign roles or change any assumption (scope, systems, measure, persona,
+  fields) via a follow-up — acceptance is the edit loop, not a pre-build
+  questionnaire.
 
-If a requested scenario isn't ESS-supported, or a prerequisite has no owner,
-surface it and resolve it with the sponsor rather than emitting an unbuildable
-Plan. When both hold, show the summary and go to Phase 3.
+If a requested scenario isn't ESS-supported, or a prerequisite has no owner, surface
+it and resolve it with the sponsor rather than emitting an unbuildable Plan. When the
+ADK-satisfied bar holds, show the summary + eval preview and go to Phase 3.

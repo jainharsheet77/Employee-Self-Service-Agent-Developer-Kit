@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 
 from planner import cli
-from planner.plan_model import Plan
+from planner.plan_model import Plan, plan_artifact
 
 PAUL = "00000000-0000-0000-0000-0000000000b1"
 
@@ -67,6 +67,37 @@ def test_update_and_remove_task_roundtrip(tmp_path):
     # Reconcile a deletion.
     assert _run("--plan", plan_path, "remove-task", "--id", "T1") == 0
     assert Plan.load(plan_path).task("T1") is None
+
+
+def test_remove_context_moves_a_scenario_out_of_scope(tmp_path):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-scenario", "--id", "hr-ticketing", "--label", "HR ticketing")
+    assert "hr-ticketing" in Plan.load(plan_path).in_scope_scenarios()
+    assert _run("--plan", plan_path, "remove-context", "--key", "hr-ticketing") == 0
+    assert "hr-ticketing" not in Plan.load(plan_path).in_scope_scenarios()
+    # A mistyped / unknown key fails loudly.
+    assert _run("--plan", plan_path, "remove-context", "--key", "nope") == 1
+
+
+def test_check_deps_flags_and_clears_a_dangling_consume(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    # A task consumes a key nothing on the plan produces (e.g. after a bad edit).
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Author HR topic",
+         "--role", "knowledge-admin", "--consumes", "workdayConnection")
+    rc = _run("--plan", plan_path, "check-deps")
+    out = capsys.readouterr().out
+    assert rc == 1
+    assert "Task-graph gaps" in out
+    assert "workdayConnection" in out
+    # Re-adding the producer makes the graph coherent again.
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday",
+         "--role", "integration-owner", "--produces", "workdayConnection")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "check-deps")
+    assert rc == 0
+    assert "Task graph is coherent" in capsys.readouterr().out
 
 
 def test_full_flow(tmp_path, capsys):
@@ -155,6 +186,118 @@ def test_capture_setup_dry_run_saves_nothing(tmp_path, capsys):
     assert Plan.load(plan_path).output("primaryEnvironment") is None  # nothing pinned
 
 
+def test_capture_setup_completes_every_task_the_run_produced(tmp_path, capsys):
+    """A single /setup run records the environment AND clones the agent, so
+    `capture-setup --complete` must close BOTH the environment task and the
+    base-agent task when the plan splits them — not just the triggered one."""
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "setup": "complete",
+            "dataverseEndpoint": "https://org.crm.dynamics.com",
+            "environmentId": "env-123",
+            "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
+        }),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Onboard the ADK (run /setup)", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Install the base agent",
+         "--description", "Clone the ESS base agent", "--role", "env-maker",
+         "--produces", "essAgent", "--consumes", "primaryEnvironment")
+    capsys.readouterr()
+
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1",
+              "--config", str(config_path), "--before", "{}", "--complete")
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Also completed" in err and "T2" in err  # the base-agent task, same run
+
+    plan = Plan.load(plan_path)
+    assert plan.task("T1")["state"] == "Completed"   # the triggered task
+    assert plan.task("T2")["state"] == "Completed"   # closed by the same /setup run
+    # The base-agent artifact is attributed to the task that OWNS it (T2), not the
+    # setup task that happened to capture it — so removing the setup task later
+    # cannot cascade-delete the output T2 depends on.
+    assert plan.output("essAgent")["producedByTaskId"] == "T2"
+    plan.remove_task("T1")
+    assert plan.output("essAgent") is not None          # survives T1 removal
+    assert plan.unresolved_produces("T2") == []          # T2 stays legitimately done
+
+
+def test_capture_setup_only_completes_tasks_fully_produced_this_run(tmp_path, capsys):
+    """A split task whose outputs were only PARTLY produced by this run stays open:
+    an earlier run satisfying the rest must not let one freshly pinned key close it."""
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "setup": "complete",
+            "dataverseEndpoint": "https://org.crm.dynamics.com",
+            "environmentId": "env-123",
+            "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
+        }),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Onboard the ADK (run /setup)", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    # T2 needs BOTH essAgent (pinned this run) AND evalSuite (produced earlier).
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Install the base agent",
+         "--description", "Clone the ESS base agent", "--role", "env-maker",
+         "--produces", "essAgent,evalSuite", "--consumes", "primaryEnvironment")
+    # Pin evalSuite from an EARLIER run, so unresolved_produces(T2) would be empty.
+    plan = Plan.load(plan_path)
+    plan.add_output(plan_artifact("evalSuite", "Custom", {"id": "s"}, produced_by_task_id="T2"))
+    plan.save(plan_path)
+    capsys.readouterr()
+
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1",
+              "--config", str(config_path), "--before", "{}", "--complete")
+    assert rc == 0
+
+    plan = Plan.load(plan_path)
+    assert plan.task("T1")["state"] == "Completed"
+    # This run produced essAgent but NOT evalSuite, so it must not close T2.
+    assert plan.task("T2")["state"] != "Completed"
+
+
+def test_capture_setup_leaves_unrelated_tasks_open(tmp_path, capsys):
+    """The cascade is scoped to what the run produced: a task whose `produces`
+    the run did NOT satisfy stays open."""
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "setup": "complete",
+            "dataverseEndpoint": "https://org.crm.dynamics.com",
+            "environmentId": "env-123",
+            "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
+        }),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Onboard the ADK (run /setup)", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T9", "--title", "Connect Workday",
+         "--description", "Run /connect", "--role", "env-maker",
+         "--produces", "workdayConnection", "--consumes", "primaryEnvironment")
+    capsys.readouterr()
+
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1",
+              "--config", str(config_path), "--before", "{}", "--complete")
+    assert rc == 0
+
+    plan = Plan.load(plan_path)
+    assert plan.task("T1")["state"] == "Completed"
+    assert plan.task("T9")["state"] != "Completed"   # /setup didn't produce workdayConnection
+
+
 def test_summary_is_read_only(tmp_path):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
@@ -162,6 +305,21 @@ def test_summary_is_read_only(tmp_path):
     md.write_text("MY UNRECONCILED EDITS", encoding="utf-8")
     _run("--plan", plan_path, "summary")
     assert md.read_text(encoding="utf-8") == "MY UNRECONCILED EDITS"  # summary didn't clobber
+
+
+def test_summary_emits_task_checklist_readback(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect Workday",
+         "--role", "workday-admin", "--stream", "Workday")
+    capsys.readouterr()
+    _run("--plan", plan_path, "summary")
+    err = capsys.readouterr().err
+    # The assistant gets a deterministic, grouped checklist to echo verbatim after
+    # the download link — so it renders the breakdown instead of a bare task count.
+    assert "readback:" in err
+    assert "**Workday**" in err
+    assert "- ⬜ Connect Workday — workday-admin (pool)" in err
 
 
 def test_pin_output_rejects_malformed_attr(tmp_path, capsys):

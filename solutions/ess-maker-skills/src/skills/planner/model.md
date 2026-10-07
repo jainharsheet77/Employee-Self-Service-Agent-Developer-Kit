@@ -8,19 +8,31 @@ Add each Task with:
 
 ```
 python scripts/planner/cli.py add-task --id <T#> \
-  --title "<short imperative title>" \
+  --title "<the outcome, never the command — 'Set up the environment', not 'Run /setup'>" \
   --description "<self-explanatory: what to do and how — including which command to run, e.g. 'Run /connect to connect Workday to the ESS agent and follow its steps'>" \
   --role <attestable-role> \
   [--produces <key,key>] [--consumes <key,key>]
 ```
 
-**Title + description must be self-explanatory.** A reader (or the assignee)
-should know exactly what to do from those two alone — including which kit command
-to run (say it in the description, e.g. "run `/connect`", "in the Power Platform
-admin center, register an Entra app…"). **Do not** encode the "how" in structured
-fields like an action/kit-skill type — those are not task data; the description
-carries it. (The setup task is identified by what it **produces**, below — not by
-any skill field.)
+**Title names the outcome; the description names the how (including the command).**
+The plan the sponsor sees lists tasks by **title + role only** — the description
+renders **only in the detailed brief** when an assignee engages the task
+(`plan_model._render_tasks`; `mytasks.md` → *Brief the task in detail*). So:
+
+- **Title = the outcome, never the command.** "Set up the environment", not
+  "Run /setup"; "Connect Workday", not "Run /connect". A reader scanning the plan
+  sees results, not kit commands.
+- **Description = what to do and how, including which command to run** — say it in
+  prose ("run `/connect`", "in the Power Platform admin center, register an Entra
+  app…"). Because the description is brief-only, naming the command here reveals it
+  exactly when the assignee asks (opens the task), not in the plan overview.
+- **Do not** encode the "how" in structured fields like an action/kit-skill type —
+  those are not task data; the description carries it. (The setup task is identified
+  by what it **produces**, below — not by any skill field.)
+- **One skill run completes one _or more_ tasks.** When the assignee runs the skill,
+  capture closes **every** plan task that run fully produced — e.g. a single
+  `/setup` run records the environment and clones the agent, completing both the
+  environment task and the base-agent task if the plan splits them (`capture.md`).
 
 **The description names the how; the _detailed_ steps are enriched from Learn on
 start — so keep the Learn anchor.** Keep the description a clear, self-contained
@@ -57,6 +69,14 @@ A kit skill (e.g. `connect`) is itself a multi-step procedure with its own
 checklist. Those individual steps stay **inside the skill** — they do NOT each
 become a Task, and you do NOT add both "run connect" and its checklist items.
 
+**Exhaustive — every step the skill performs lands on the plan.** For a system
+with a kit skill (connect Workday, setup), the plan must represent **all** of that
+skill's work — don't drop or summarise steps. The rules below decide their
+*shape*, not whether they appear: same-role sequential steps collapse into **one
+outcome task** (its steps live inside the skill, surfaced at brief time), and each
+distinct role the flow touches gets its **own** task. Nothing the skill does is
+left off the plan.
+
 **But split a Task on every role boundary. Role boundary = Task boundary.** A
 Task is atomic: exactly one role can complete it. If the docs put part of the
 work on a *different* role, that part is its own Task — never split by step,
@@ -79,8 +99,9 @@ python scripts/planner/cli.py setup-tasks --system workday --commands
 It reads the checklist, groups **every** step by its role boundary, maps each
 grounded role to its **attestable** role, and prints ready-to-run `add-task`
 lines — one Task per (group, role), covering all 25 steps across all 6 groups.
-Emit those lines **verbatim**; add `--skip-foundation` when a backbone `Run setup`
-task already produces `primaryEnvironment`/`essAgent` (checklist groups 1–2). Omit
+Emit those lines **verbatim**; add `--skip-foundation` when a backbone **Set up
+the environment** (`/setup`) task already produces `primaryEnvironment`/`essAgent`
+(checklist groups 1–2). Omit
 `--commands` for the structured JSON. Never invent, drop, merge, or re-role what
 it emits.
 
@@ -122,7 +143,8 @@ InfoSec/IT — it comes from the mapping above, not invented per-run.
 | Author your first custom Workday topic | `PowerPlatformEnvironmentMaker` | Environment Maker (+ Workday SME) | S6.1–S6.3 | `topic:workday` |
 
 Groups 1–2 stand up the shared environment + base agent — pass `--skip-foundation`
-to drop them when a backbone `Run setup` task already covers them. Group 5 is
+to drop them when a backbone **Set up the environment** (`/setup`) task already
+covers them. Group 5 is
 itself multi-role (Environment Maker for the pack + connect, InfoSec/IT for the
 firewall), which is why it yields two Tasks.
 
@@ -133,7 +155,7 @@ The "how" is the **description** (say which command to run in prose); `produces`
 
 | Task (title) | Description (what & how) | Produces | Consumes | Role (attestable) |
 |------|--------|----------|----------|-----------------|
-| Run setup | Run `/setup` to onboard the ADK to the deployed agent — records the environment **and clones the agent** into the workspace | `primaryEnvironment, essAgent` | — | `EntraPowerPlatformAdministrator` |
+| Set up the environment | Onboard the ADK to the deployed agent — records the environment **and clones the agent** into the workspace (run `/setup`) | `primaryEnvironment, essAgent` | — | `EntraPowerPlatformAdministrator` |
 | Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `EntraPowerPlatformAdministrator` |
 | Discover the tenant inventory | Run `/discover` to crawl the configured environment and record what already exists | `tenantInventory` | `primaryEnvironment` | `EntraPowerPlatformAdministrator` |
 | Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `EntraCloudApplicationAdministrator` |
@@ -151,22 +173,32 @@ The "how" is the **description** (say which command to run in prose); `produces`
 `.local/config.json` and pins **every** id + name (and any other artifact a skill
 recorded) — the environment, the cloned agent, and anything else the run wrote
 (a connection, an app…) — even outputs the task didn't pre-declare (see
-`capture.md`).
+`capture.md`). And `capture-setup --complete` **cascades across tasks**: it closes
+every plan task that run fully produced, so one `/setup` run completes both the
+environment task and the base-agent task when they're modelled separately — not
+just the task that triggered the capture.
 
 **`tenantInventory` is the one backbone output `capture-setup` cannot see.**
 `/discover` writes its findings to `.local/inventory.json` and leaves only two
 top-level *strings* in `.local/config.json` (`inventoryPath`, `inventoryUpdatedAt`).
-The generic sweep pins **id-bearing objects**, so it skips both. Close that task
-with `pin-output` instead — a task with unresolved `produces` is refused
-`Completed`, so a discover task that declares `tenantInventory` and is never
-pinned stays open forever:
+The generic sweep pins **id-bearing objects**, so it skips both. So the `/discover`
+skill **closes its own task**: when a run finishes it calls `capture-discover`, which
+reads `workspace/discover/results.json`, pins a single `Custom` `tenantInventory`
+artifact (per-kind resource counts + the write path + a pointer to the mirror), and —
+because a task with unresolved `produces` is refused `Completed` — marks the discover
+task done so it never stays open forever. You don't pin it by hand; the same command
+run from the planner is the fallback if you ever need it:
 
 ```
-python scripts/planner/cli.py pin-output --task <T#> --key tenantInventory \
-  --kind Custom --attr inventoryPath=.local/inventory.json --complete
+python scripts/planner/cli.py capture-discover --complete
 ```
 
-When the tasks are in, show the summary and go to Phase 4.
+(auto-detects the plan's discover task; `--dry-run` previews without saving.)
+
+When the tasks are in, **publish the plan (roles pooled) and show it** (download
+link + checklist), then go to Phase 4 — **naming people to the pooled roles is a
+follow-up after the plan is shown**, not a pre-publish gate
+(`src/skills/planner/assign.md`).
 
 **Native connector vs. custom flow.** A "run `/connect`" task is only valid for a
 system ESS has a **native integration** for (Workday, ServiceNow HRSD/ITSM, SAP
@@ -216,7 +248,7 @@ that is:
 
 ```
 # 1. PP admin onboards the ADK (records the environment AND clones the agent)
-python scripts/planner/cli.py add-task --id T1 --stream "Setup" --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment and clones the agent)" --role EntraPowerPlatformAdministrator --produces "primaryEnvironment,essAgent"
+python scripts/planner/cli.py add-task --id T1 --stream "Setup" --title "Set up the environment" --description "Onboard the ADK to the deployed agent — record the environment and the cloned agent (run /setup)" --role EntraPowerPlatformAdministrator --produces "primaryEnvironment,essAgent"
 # 2. PP admin takes stock of the tenant BEFORE any connect work is planned
 python scripts/planner/cli.py add-task --id T2 --stream "Setup" --title "Discover the tenant inventory" --description "Run /discover to crawl the environment configured during /setup and record the tenant's existing agent resources (environments, app registrations, connectors, connections, SharePoint sites, knowledge sources, extension packs, scenario templates)" --role EntraPowerPlatformAdministrator --produces tenantInventory --consumes primaryEnvironment
 # 3. Workday is MULTI-ROLE and ships a checklist — DON'T hand-write it. Emit the

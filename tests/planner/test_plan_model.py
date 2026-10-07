@@ -16,6 +16,7 @@ import pytest
 from planner.plan_model import (
     Limits,
     Plan,
+    SCENARIO_GROUP,
     assignee_role_id,
     assignee_user_oid,
     context_entry,
@@ -235,6 +236,30 @@ def test_remove_task():
         plan.remove_task("T1")
 
 
+def test_remove_task_drops_the_outputs_it_produced():
+    # Removing a producer must not leave an output pointing at a deleted task
+    # (which validate would flag) — the ledger stays coherent automatically.
+    plan = _plan_with_tasks()
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.add_output(plan_artifact("evalSuite", "Custom", {"id": "s"}, produced_by_task_id="T2"))
+    plan.remove_task("T1")
+    assert plan.output("primaryEnvironment") is None  # T1's output is gone
+    assert [a["key"] for a in plan.outputs] == ["evalSuite"]  # T2's survives
+    assert not [e for e in plan.validate() if "unknown task" in e]
+
+
+def test_remove_context_moves_an_entry_out_of_scope():
+    plan = Plan.new()
+    plan.set_context("hr-ticketing", "HR ticketing", group=SCENARIO_GROUP)
+    assert "hr-ticketing" in plan.in_scope_scenarios()
+    removed = plan.remove_context("hr-ticketing")
+    assert removed["key"] == "hr-ticketing"
+    assert "hr-ticketing" not in plan.in_scope_scenarios()
+    # A mistyped / already-removed key fails loudly.
+    with pytest.raises(KeyError):
+        plan.remove_context("hr-ticketing")
+
+
 # --------------------------------------------------------------------------- #
 # Output ledger — supersede-by-key, filter-by-task
 # --------------------------------------------------------------------------- #
@@ -370,6 +395,26 @@ def test_waiting_on_marks_external_key_no_task_produces():
     assert plan.dependency_marker("T1") == "needs externalId"
 
 
+def test_task_consume_gaps_flags_a_dangling_consume():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "Author HR topic", consumes=["workdayConnection"]))
+    # Nothing produces workdayConnection -> the task is blocked forever.
+    assert plan.task_consume_gaps() == [
+        {"task": "T1", "title": "Author HR topic", "missing": "workdayConnection"}
+    ]
+    # Re-add the producer (e.g. after an edit) -> the gap clears.
+    plan.add_task(new_task("T2", "Connect Workday", produces=["workdayConnection"]))
+    assert plan.task_consume_gaps() == []
+
+
+def test_task_consume_gaps_ignores_keys_already_pinned_as_active_outputs():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    # No producer task, but the key is already pinned Active -> not a gap.
+    plan.add_output(plan_artifact("envId", "Environment", {"environmentId": "e"}, produced_by_task_id="T2"))
+    assert plan.task_consume_gaps() == []
+
+
 def test_dependency_marker_dedupes_and_sorts_producers():
     plan = Plan.new()
     plan.add_task(new_task("T1", "consume both", consumes=["a", "b"]))
@@ -397,6 +442,66 @@ def test_render_summary_locks_dependent_tasks():
     assert "🔒" not in rows["produce"]
     # The ready task still carries an icon (design has one per state).
     assert "⬜ Not started" in rows["produce"]
+
+
+# --------------------------------------------------------------------------- #
+# Chat task checklist (deterministic readback the assistant echoes verbatim)
+# --------------------------------------------------------------------------- #
+
+def test_render_task_checklist_groups_by_stream_with_icons_and_roles():
+    plan = Plan.new()
+    plan.add_task(new_task(
+        "T1", "Create a Power Platform Environment", stream="Setup",
+        assigned_to=principal_pool("pp-admin"), produces=["envId"],
+    ))
+    plan.add_task(new_task(
+        "T2", "Connect Workday", stream="Workday",
+        assigned_to=principal_pool("workday-admin"),
+    ))
+    checklist = plan.render_task_checklist()
+    # Grouped under a bold workstream header, each task `<icon> <title> — <role>`.
+    assert "**Setup**" in checklist
+    assert "**Workday**" in checklist
+    assert "- ⬜ Create a Power Platform Environment — pp-admin (pool)" in checklist
+    assert "- ⬜ Connect Workday — workday-admin (pool)" in checklist
+    # Streams keep execution order (Setup before Workday).
+    assert checklist.index("**Setup**") < checklist.index("**Workday**")
+
+
+def test_render_task_checklist_locks_dependent_task():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", stream="S", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", stream="S", produces=["envId"]))
+    checklist = plan.render_task_checklist()
+    # The consumer waits on its producer -> 🔒; the ready producer -> ⬜. The
+    # producer renders before the consumer (same execution order as the table).
+    assert "- 🔒 consume" in checklist
+    assert "- ⬜ produce" in checklist
+    assert checklist.index("produce") < checklist.index("consume")
+
+
+def test_render_task_checklist_shows_one_icon_per_state():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "done", state="Completed"))
+    plan.add_task(new_task("T2", "doing", state="InProgress"))
+    plan.add_task(new_task("T3", "stuck", state="Blocked"))
+    checklist = plan.render_task_checklist()
+    assert "- ✅ done" in checklist
+    assert "- 🔄 doing" in checklist
+    assert "- 🔒 stuck" in checklist
+
+
+def test_render_task_checklist_flat_without_streams():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "lonely"))
+    checklist = plan.render_task_checklist()
+    # No stream on any task -> a single flat list, no workstream headers.
+    assert checklist == "- ⬜ lonely — unassigned"
+    assert "**" not in checklist
+
+
+def test_render_task_checklist_empty_when_no_tasks():
+    assert Plan.new().render_task_checklist() == ""
 
 
 def test_tasks_for_person_reports_waiting_on():

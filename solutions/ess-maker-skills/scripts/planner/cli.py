@@ -29,13 +29,20 @@ import argparse
 import json
 import os
 import sys
+import textwrap
 
 # Ensure scripts/ is on the path so ``import planner...`` resolves when this
 # file is run directly (mirrors scripts/flightcheck/cli.py).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from planner import research, setup_tasks
-from planner.capture import detect_config_artifacts, snapshot_config
+from planner.capture import (
+    INVENTORY_MIRROR_PATH,
+    detect_config_artifacts,
+    read_config,
+    snapshot_config,
+    summarize_discovery,
+)
 from planner.plan_model import (
     ARTIFACT_KINDS,
     CONFIGURING_AGENT_CHOICES,
@@ -215,9 +222,12 @@ def cmd_add_scenario_dependency(args: argparse.Namespace) -> int:
 def cmd_check_deps(args: argparse.Namespace) -> int:
     plan = _load(args)
     status = plan.scenario_dependency_status()
+    gaps = plan.task_consume_gaps()
     if args.json:
-        print(json.dumps(status, indent=2))
-        return 0
+        print(json.dumps(
+            {"scenarioDependencies": status, "taskGraphGaps": gaps}, indent=2
+        ))
+        return 1 if gaps else 0
     met = [e for e in status if e.get("met")]
     unmet = [e for e in status if not e.get("met")]
     if met:
@@ -225,16 +235,24 @@ def cmd_check_deps(args: argparse.Namespace) -> int:
         for edge in met:
             print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}  [met]")
         print()
-    if not unmet:
-        print("No unmet scenario dependencies.")
-        return 0
-    print("Unmet scenario dependencies (advise the sponsor to add the prerequisite first):\n")
-    for edge in unmet:
-        print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}")
-        if edge.get("rationale"):
-            print(f"      why: {edge['rationale']}")
-        if edge.get("source"):
-            print(f"      source: {edge['source']}")
+    if unmet:
+        print("Unmet scenario dependencies (advise the sponsor to add the prerequisite first):\n")
+        for edge in unmet:
+            print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}")
+            if edge.get("rationale"):
+                print(f"      why: {edge['rationale']}")
+            if edge.get("source"):
+                print(f"      source: {edge['source']}")
+        print()
+    else:
+        print("No unmet scenario dependencies.\n")
+    if gaps:
+        print("Task-graph gaps (a task consumes something nothing on the plan produces):\n")
+        for gap in gaps:
+            print(f"  - {gap['task']} ({gap['title']}) needs '{gap['missing']}' — no task produces it")
+        print("\nRe-add the producer, or remove/repoint the consumer, then re-check.")
+        return 1
+    print("Task graph is coherent: every consumed output has a producer.")
     return 0
 
 
@@ -291,6 +309,18 @@ def cmd_remove_task(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_remove_context(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    try:
+        plan.remove_context(args.key)
+    except KeyError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    _save(plan, args)
+    print(f"Removed context {args.key!r}")
+    return 0
+
+
 def cmd_assign(args: argparse.Namespace) -> int:
     plan = _load(args)
     plan.assign_task(args.task, role_id=args.role, person_oid=args.person)
@@ -329,6 +359,12 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     Reads the current .local/config.json as the "after" snapshot; the "before"
     is empty (setup has just run). The skill confirms with the assignee before
     this is called, then shows the pinned artifact(s).
+
+    With ``--complete``, one run can close **more than one** task: beyond the
+    named/auto-detected task, every other plan task whose declared ``produces``
+    the run fully satisfied is also marked Completed (e.g. a single ``/setup``
+    run closes both the environment task and the base-agent task when the plan
+    splits them).
     """
     plan = _load(args)
     task_id = args.task or plan.setup_task_id()
@@ -369,8 +405,120 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
             )
         else:
             plan.set_task_state(task_id, "Completed")
+        # One skill run can satisfy several plan tasks — e.g. /setup both records
+        # the environment (primaryEnvironment) AND clones the agent (essAgent). If
+        # the plan splits those into separate tasks, close every OTHER task this
+        # run fully produced too, so running the skill completes all the tasks it
+        # covers, not just the one that triggered the capture.
+        pinned_keys = {a["key"] for a in pinned}
+        pinned_by_key = {a["key"]: a for a in pinned}
+        also_completed: list[str] = []
+        for t in plan.tasks:
+            tid = t["id"]
+            if tid == task_id or t.get("state") == "Completed":
+                continue
+            produces = t.get("produces") or []
+            # Close a split task only when THIS run produced EVERY one of its
+            # declared outputs — not when an earlier run already satisfied the
+            # rest (unresolved_produces counts all-time active outputs, so an
+            # `any(...)` test would complete a task on partial credit). And
+            # re-attribute each such output to the task that actually owns it:
+            # detect_config_artifacts stamped them all with the setup task_id, so
+            # without this a split base-agent task is Completed while its artifact
+            # belongs to the setup task — and removing that setup task later
+            # cascade-deletes the artifact, leaving the completed task unresolved.
+            if produces and all(k in pinned_keys for k in produces):
+                for key in produces:
+                    pinned_by_key[key]["producedByTaskId"] = tid
+                plan.set_task_state(tid, "Completed")
+                also_completed.append(tid)
+        if also_completed:
+            print(
+                "Also completed (produced by this run): " + ", ".join(also_completed),
+                file=sys.stderr,
+            )
     _save(plan, args)
     print(json.dumps(pinned, indent=2))
+    return 0 if complete_ok else 1
+
+
+def cmd_capture_discover(args: argparse.Namespace) -> int:
+    """Observe-mode capture for the ``/discover`` hand-off — pin the tenant
+    inventory summary a crawl produced onto the plan so the discover task can close
+    and downstream tasks read it off the plan.
+
+    The tenant inventory is the one backbone output ``capture-setup`` cannot see:
+    ``/discover`` writes the full picture to the durable mirror
+    (``.local/inventory.json``) and only leaves two string pointers in
+    ``config.json``, which the generic id+name sweep skips. This reads the run's
+    ``results.json`` instead and shapes one ``Custom`` ``tenantInventory`` artifact.
+    ``--task`` is optional — omitted, it auto-detects the plan's discover task (the
+    task that produces ``tenantInventory``).
+    """
+    plan = _load(args)
+    task_id = args.task or plan.discover_task_id()
+    if not task_id:
+        print(
+            "No discover task found on the plan (no task produces 'tenantInventory'); "
+            "pass --task <T#>, or skip if this plan isn't tracking discovery.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        with open(args.results, "r", encoding="utf-8") as fh:
+            results = json.load(fh)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"Could not read discovery results at {args.results!r}: {exc}. "
+            "Run /discover first — it writes workspace/discover/results.json.",
+            file=sys.stderr,
+        )
+        return 1
+    config = read_config(args.config)
+    updated_at = config.get("inventoryUpdatedAt")
+    # ``/discover --inventory-out`` records where it actually mirrored the inventory
+    # in ``config.json`` (``inventoryPath``). Honour that so a custom mirror path is
+    # not silently overwritten by the parser default; an explicit --inventory-path
+    # still wins, and the mirror default is the last-resort fallback.
+    inventory_path = args.inventory_path or config.get("inventoryPath") or INVENTORY_MIRROR_PATH
+    artifact = summarize_discovery(
+        results,
+        task_id=task_id,
+        key=args.key,
+        inventory_path=inventory_path,
+        results_path=args.results,
+        updated_at=updated_at,
+    )
+    if artifact is None:
+        print(
+            "Discovery run aborted — nothing was recorded, so there is nothing to "
+            "pin. Re-run /discover, then capture again.",
+            file=sys.stderr,
+        )
+        return 1
+    if args.dry_run:
+        print(json.dumps(artifact, indent=2))
+        print(
+            f"[dry-run] detected the {artifact['key']} artifact; nothing saved. "
+            "Confirm with the assignee, then re-run without --dry-run to pin.",
+            file=sys.stderr,
+        )
+        return 0
+    plan.add_output(artifact)
+    complete_ok = True
+    if args.complete:
+        missing = plan.unresolved_produces(task_id)
+        if missing:
+            complete_ok = False
+            print(
+                f"Pinned; NOT completing {task_id} — unresolved produces {missing}. "
+                "Pin the rest, then complete.",
+                file=sys.stderr,
+            )
+        else:
+            plan.set_task_state(task_id, "Completed")
+    _save(plan, args)
+    print(json.dumps(artifact, indent=2))
     return 0 if complete_ok else 1
 
 
@@ -573,6 +721,16 @@ def cmd_summary(args: argparse.Namespace) -> int:
             f"    \U0001F4C4 [ESS-scenario-plan.md]({link}) — download or edit your plan",
             file=sys.stderr,
         )
+        checklist = plan.render_task_checklist()
+        if checklist:
+            print(
+                "readback: immediately AFTER the download link, render this grouped "
+                "task checklist inline in chat verbatim — it is the breakdown the "
+                "maker expects to see. Do NOT collapse it to a bare count like 'N "
+                "tasks across M workstreams'; render every line:\n"
+                + textwrap.indent(checklist, "    "),
+                file=sys.stderr,
+            )
     # A built plan that isn't on the shared planner yet must be published now —
     # see src/skills/planner/sync.md -> Push.
     if plan.tasks and not plan.data.get("planId"):
@@ -729,6 +887,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
     p.set_defaults(func=cmd_set_context)
 
+    p = sub.add_parser(
+        "remove-context",
+        help="remove a context entry by key (move a scenario/system/dependency out of scope)",
+    )
+    p.add_argument("--key", required=True,
+                   help="scenario id, 'system.<area>', or a 'A -> B' dependency key")
+    p.set_defaults(func=cmd_remove_context)
+
     p = sub.add_parser("add-scenario", help="register a scenario in scope")
     p.add_argument("--id", required=True, help="scenario id, e.g. hr-ticketing")
     p.add_argument("--label", required=True, help="human-readable scenario label")
@@ -802,6 +968,20 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--complete", action="store_true", help="mark the task Completed")
     p.set_defaults(func=cmd_capture_setup)
 
+    p = sub.add_parser("capture-discover", help="observe /discover output and pin the tenant inventory summary onto the plan")
+    p.add_argument("--task", help="discover task id (default: auto-detect the plan's /discover task)")
+    p.add_argument("--key", default="tenantInventory")
+    p.add_argument("--results", default=os.path.join("workspace", "discover", "results.json"),
+                   help="the /discover results JSON to summarize")
+    p.add_argument("--inventory-path", dest="inventory_path", default=None,
+                   help="pointer to the durable local inventory mirror recorded on the artifact "
+                        "(default: the inventoryPath in config.json, else .local/inventory.json)")
+    p.add_argument("--config", default=os.path.join(".local", "config.json"),
+                   help="config.json to read inventoryUpdatedAt from")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true", help="detect and print the artifact without saving (preview for confirm-before-pin)")
+    p.add_argument("--complete", action="store_true", help="mark the discover task Completed")
+    p.set_defaults(func=cmd_capture_discover)
+
     p = sub.add_parser("snapshot-config", help="print the config.json snapshot (capture before an action for capture-setup --before-file)")
     p.add_argument("--config", default=os.path.join(".local", "config.json"))
     p.set_defaults(func=cmd_snapshot_config)
@@ -845,7 +1025,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="setup system whose checklist to decompose (default: workday)")
     p.add_argument("--skip-foundation", action="store_true",
                    help="drop the shared foundation groups (Power Platform environment + "
-                        "ESS base agent) already produced by the backbone 'Run setup' task")
+                        "ESS base agent) already produced by the backbone 'Set up the "
+                        "environment' (/setup) task")
     p.add_argument("--commands", action="store_true",
                    help="print copy-paste add-task command lines instead of JSON")
     p.set_defaults(func=cmd_setup_tasks)

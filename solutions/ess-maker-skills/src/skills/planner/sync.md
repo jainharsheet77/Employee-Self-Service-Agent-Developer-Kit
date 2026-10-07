@@ -16,9 +16,39 @@ authored plan as one object.
   tools only talk to the service. You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
 
-If a planner tool reports it needs sign-in, ask the sponsor to authenticate once,
-then retry the same call. If the tools stay unreachable, fall back to the local
-cache and carry on — planning is never blocked by the service being offline.
+**Sign-in is the tool's job — never ask the sponsor whether to sign in.** Each
+planner tool authenticates itself, and on an expired/rejected token (a 401) it
+renews in place: silently when the refresh token is still good (no window), and
+otherwise by **opening a browser sign-in itself** and replaying the call once the
+sponsor finishes. That browser prompt is the *only* interaction sign-in ever needs —
+so you never diagnose it, never narrate the mechanism, never read any MCP/auth
+source to explain it, and above all **never present an `ask_user` / "how would you
+like to proceed?" choice about signing in.** Treat each call by walking this
+ladder **in order** — never cycle back up it:
+
+- **It succeeds** — possibly after a sign-in window appeared mid-call and the
+  sponsor completed it. Expected; just carry on. Say nothing about sign-in.
+- **It still returns an explicit "sign in again" (HTTP 401)** after the tool's own
+  browser sign-in — the server can be wedged on a dead in-memory session that only a
+  fresh process clears. Take **one** mechanical recovery, then retry the same call
+  **once**: restart the `ess-planner` MCP server — run the editor's *MCP: Restart
+  Server* command yourself if that's available to you, otherwise tell the sponsor in
+  one plain line to run it (Command Palette → *MCP: Restart Server* → `ess-planner`).
+  The restart rebuilds the client and re-triggers a clean sign-in.
+- **It 401s again even after that restart + retry** — stop. Say one plain line —
+  *"I'll keep the plan local for now; it'll save to the shared space on the next
+  successful sync"* — and continue locally. A 401 that survives a fresh sign-in and a
+  restart means the account can't reach the shared plan; nothing more you do helps.
+- **Any non-401 failure** (network error, 5xx) — fall back to the local cache the
+  same way, silently.
+
+That single restart is the **only** mechanical recovery you ever take. Do **not**
+clear or inspect token caches, read any MCP/auth source, check the token source, or
+reason about the client's internals — that is the spiral to avoid, not a path to a
+fix. The whole budget is: one 401 → at most one restart + one retry → then local.
+Never open a diagnostic thread, and the sponsor is only ever prompted by the tool's
+own sign-in window or that one restart line — never by a "how would you like to
+proceed?" question. Planning is never blocked by the service.
 
 ## Identify the project (always first)
 
@@ -78,14 +108,15 @@ diagnostics, never as a reason to refuse the plan.
 ## Push — publish a newly authored plan as one object
 
 **Publishing is automatic and mandatory, not optional.** The moment the plan is
-modelled and assigned (end of Phase 4), push it — without waiting for the sponsor
-to ask. A plan that still shows `(local, not synced)` / has no plan id lives only
-in the local cache and has **not** been persisted; the sponsor's work is at risk
-until it is pushed. Re-run this push after any later change the tools didn't
-already mirror.
+modelled with its roles **pooled** (end of Phase 3), push it — without waiting for
+the sponsor to ask, and without waiting to name people (naming is the Phase 4
+follow-up, after the plan is shown). A plan that still shows `(local, not synced)` /
+has no plan id lives only in the local cache and has **not** been persisted; the
+sponsor's work is at risk until it is pushed. Re-run this push after any later change
+the tools didn't already mirror.
 
-After you've built the plan locally through the phases (research → interview →
-model → assign), publish it in **one** create call rather than task-by-task:
+After you've built the plan locally through the modelling phase (research →
+interview → model), publish it in **one** create call rather than task-by-task:
 
 1. **Confirm whether this plan targets HR or IT — the only agent axis left.**
    The create body's `configuringAgentName` is required. The ESS agent ships as

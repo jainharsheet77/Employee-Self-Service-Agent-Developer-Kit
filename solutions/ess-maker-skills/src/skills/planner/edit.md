@@ -1,8 +1,8 @@
 # Planner — Editing the plan (the Markdown round-trip)
 
 The Plan's human view — `workspace/plan/ESS-scenario-plan.md` — is not just a
-read-out. It is the **editable surface** a Plan editor works with. The CLI
-regenerates it from `plan.json` after every change, and the editor can revise it
+read-out. It is the **editable surface** the maker works with. The CLI
+regenerates it from `plan.json` after every change, and the maker can revise it
 and have those revisions **reconciled back into the plan**. `plan.json` stays the
 source of truth; the Markdown is how a human edits it.
 
@@ -43,6 +43,11 @@ download and re-upload. Offer the two ways to change it:
 
 Speak in terms of the plan and its tasks — never mention `plan.json`, the CLI, or
 which files you read.
+
+After any change lands, re-render with `python scripts/planner/cli.py summary` and
+surface the result the same way a fresh plan is presented — the downloadable link
+**then** the grouped task checklist inline (see `SKILL.md` → "Building the plan"),
+never a bare count — so the editor sees exactly what changed.
 
 > **Editing our view vs. importing their plan.** This file reconciles a re-upload
 > of the kit's **own** `ESS-scenario-plan.md` (diffed by task id) into a plan that
@@ -86,12 +91,90 @@ overwrite their edits**:
    python scripts/planner/cli.py set-state --task <T#> --state Completed
    python scripts/planner/cli.py add-scenario --id <id> --label "..."
    python scripts/planner/cli.py set-context --key <k> --value "..." --group <group> --description "..." --source User
+   python scripts/planner/cli.py remove-context --key <scenario-id | system.<area> | "A -> B">
    ```
 
 4. **Re-render and show it back.** Applying a change regenerates
-   `ESS-scenario-plan.md`; run `validate`, then show the refreshed plan — *"I saw
-   your changes and updated the plan — here it is again"*, calling out what changed
-   (e.g. "added *Add parental-leave knowledge source*").
+   `ESS-scenario-plan.md` — but first make the plan *whole* again (next section),
+   then `validate`, then show the refreshed plan — *"I saw your changes and updated
+   the plan — here it is again"*, calling out what changed (e.g. "added *Add
+   parental-leave knowledge source*").
+
+## Keep the plan coherent, sequenced, and complete — after every edit
+
+An edit is never just a local row change. However it arrives — **said in chat**, a
+**direct Markdown edit / re-upload** of `ESS-scenario-plan.md`, or a **fresh attach**
+(`src/skills/planner/import.md`) — once you've applied the literal change, make the
+plan *whole* again **before** you show it back. A plan that lost a system's tasks, or
+kept a scenario no task serves, or left a task waiting on an output nothing produces,
+is **not** a valid plan to hand back.
+
+**1. Re-model what the edit changed the *scope* of — don't stop at one row.** Some
+edits change *what is in scope*, and a scope change changes the **task set**, not a
+single line. Treat these as a re-run of Phase-3 modelling (`model.md`) for the
+affected area:
+
+- **A scenario/system came *into* scope, or a system was swapped *in*** — e.g.
+  *"use SuccessFactors instead of Workday"*, *"also add IT ticketing"*. Emit that
+  system's **exhaustive** task set: its grounded checklist when one exists
+  (`python scripts/planner/cli.py setup-tasks --system <sys> --commands`), otherwise
+  the research-grounded, role-split set `model.md` prescribes. Wire each task into
+  the `produces`/`consumes` ledger and tag it with the right `--stream`. Not one
+  placeholder — the *whole* set, exactly as a first-time build would emit it.
+- **A scenario/system went *out* of scope, or a system was swapped *out*** — remove
+  **all** of its work, not just the row the maker deleted:
+
+  ```
+  python scripts/planner/cli.py remove-task --id <T#>         # each task in that stream (drops the outputs it produced too)
+  python scripts/planner/cli.py remove-context --key <scenario-id>   # the scope entry itself
+  python scripts/planner/cli.py remove-context --key system.<area>   # its Systems label
+  python scripts/planner/cli.py remove-context --key "<A> -> <B>"    # any scenario-dependency edge that named it
+  ```
+
+A **swap** is simply an out-of-scope removal of the old system *and* an in-scope
+emission of the new one — reuse the assignments/roles that still apply, and
+re-point each affected scenario's Systems label (`add-system`). You never need a
+system-specific script; it's always the same remove-then-emit on the stream.
+
+**2. Repair the graph — never leave a task dangling.** After applying, run:
+
+```
+python scripts/planner/cli.py check-deps
+python scripts/planner/cli.py validate
+```
+
+- **`check-deps` → "Task-graph gaps"** lists any task that now **consumes** a key
+  nothing on the plan produces (a *dangling consume* — blocked forever). Fix each:
+  re-add the producer the edit wrongly dropped, or remove/repoint the consumer that
+  is now out of scope. Re-run until it reports *"Task graph is coherent."*
+- **`validate`** must pass. (`remove-task` already clears the outputs the removed
+  task produced, so you won't be left with an output pointing at a deleted task —
+  but still validate.)
+- **`check-deps` → unmet scenario dependencies** — honour the interview rule: bring
+  the prerequisite scenario into scope or flag it to the sponsor.
+
+Don't hand-sequence the tasks: **ordering falls out of the `produces`/`consumes`
+wiring** — the view lists each producer before its consumer — so wiring the ledger
+correctly in step 1 *is* how the plan stays in the right order and its waves hold.
+
+**3. Completeness — an in-scope scenario carries its *whole* task set.** Don't leave
+a scenario half-modelled. If the edit left (or brought) a scenario in scope, it must
+have the full set — foundation (if not already present), connect/author, and
+evaluation — the same exhaustiveness Phase 3 enforces, so no in-scope capability
+ships without the tasks that build it.
+
+**4. Confirm destructive cascades, then show it back.** Removing a stream can orphan
+work the maker didn't explicitly name — confirm before deleting (the "Ask where
+ambiguous" rule below). Only once `check-deps` reports a coherent graph and
+`validate` passes, re-render (`summary`) and present the refreshed plan the usual
+way — the download link **then** the grouped checklist — calling out what changed
+(tasks added/removed, system re-pointed, new ordering/waves).
+
+> **Why this matters.** The maker edits a readable plan, not a dependency graph — the
+> Markdown can't express `produces`/`consumes`, and a one-word swap ("use
+> SuccessFactors") hides a dozen task changes. Re-modelling the affected scope and
+> re-checking the graph is what keeps every edit coherent, sequenced, and complete
+> instead of a broken half-swap.
 
 ## Ask where ambiguous — do not guess
 
@@ -117,5 +200,10 @@ reconcile.
 ## Chat-intent edits
 
 If the editor states the change in chat instead of editing the file, apply it the
-same way (the matching CLI command above), confirm, and show the refreshed plan.
-Same grounding and same "ask where ambiguous" rule.
+same way (the matching CLI command above), **run the same "Keep the plan coherent,
+sequenced, and complete" loop** — re-model any scope the change touched, repair the
+graph (`check-deps` + `validate`), confirm destructive cascades — then show the
+refreshed plan. Same grounding and same "ask where ambiguous" rule. A chat intent
+like *"use SuccessFactors instead of Workday"* or *"drop manager self-service"* is a
+scope change, not a one-line edit: it triggers the full remove-then-emit, not a
+single `set-system`.

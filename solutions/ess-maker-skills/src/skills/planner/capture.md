@@ -32,12 +32,33 @@ pin from what changed — e.g. an `Environment` (the `environmentId` + URL), an
 id + name object a skill wrote (a `Connection`, an `EntraApp`, or an unknown
 shape captured as `Custom`). Known shapes get a nice kind/key; everything else is
 captured generically. Show the assignee the detected values and confirm before
-they're saved. `--complete` also marks the Task done. (Artifacts a skill writes
+they're saved. `--complete` marks the Task done — **and every other plan task this
+run fully produced**: a single `/setup` run records the environment *and* clones
+the agent, so it also completes the base-agent task when the plan splits them (one
+run → one *or more* tasks closed). (Artifacts a skill writes
 *outside* `config.json` are handled by ask-mode `pin-output` or their own
 detectors — see below.)
 
 Do **not** trust the agent's narration ("I created env X"); the value is read
 from real state the action changed.
+
+### `/discover` closes its own inventory task
+
+`tenantInventory` is observed too, but from a different signal than `capture-setup`
+diffs. `/discover` writes the durable mirror `.local/inventory.json` and a per-run
+`workspace/discover/results.json` — not the `config.json` id + name objects the
+generic sweep pins. So the discover skill runs its own detector when a run finishes:
+
+```
+python scripts/planner/cli.py capture-discover --complete
+```
+
+It auto-detects the plan's discover task (the one that produces `tenantInventory`),
+summarizes `results.json` into a single `Custom` artifact — the per-kind resource
+counts, the write path, and a pointer to `.local/inventory.json` — and completes the
+task. It's a safe no-op (exit 1, nothing written) when the workspace has no plan or no
+task produces `tenantInventory`, so a standalone `/discover` leaves the plan untouched.
+You never pin `tenantInventory` by hand.
 
 ## (b) Ask — the assignee tells you, then commit it
 

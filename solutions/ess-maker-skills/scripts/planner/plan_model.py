@@ -97,6 +97,12 @@ CONFIGURING_AGENT_CHOICES = (
 # is described only by its title + description (matching the WeveNova Task
 # entity); there is no execution-hint/action field.
 PRIMARY_ENVIRONMENT_KEY = "primaryEnvironment"
+# The ledger key the /discover task produces — the tenant inventory summary the
+# discover skill pins back onto the plan after a crawl (see
+# capture.py::summarize_discovery and src/skills/discover/SKILL.md). Keyed like
+# PRIMARY_ENVIRONMENT_KEY so the discover task is identified by what it produces,
+# not by any execution-hint field.
+TENANT_INVENTORY_KEY = "tenantInventory"
 DEPENDENCY_KINDS = ("requires", "recommends")
 # Scenario dependency lives in the open Context bag (no new typed collection),
 # consistent with the "one Context bag" model. A scenario in scope is a Context
@@ -684,6 +690,23 @@ class Plan:
             description=f"Target system for {area}", source=source,
         )
 
+    def remove_context(self, key: str) -> dict[str, Any]:
+        """Remove a context entry by key and return it — the primitive for moving
+        something **out of scope**. A scenario (``key`` = scenario id), a Systems
+        label (``key`` = ``system.<area>``), and a scenario-dependency edge
+        (``key`` = ``"<A> -> <B>"``) are all ordinary context entries, so one
+        command drops any of them. Raises ``KeyError`` if no entry has that key,
+        so a mistyped key fails loudly.
+
+        This only drops the scope entry; it does not remove the tasks modelled for
+        that scenario/system. The edit flow (``src/skills/planner/edit.md``)
+        removes that stream's tasks and re-checks coherence around this call."""
+        for entry in self.context:
+            if entry.get("key") == key:
+                self.context.remove(entry)
+                return entry
+        raise KeyError(f"no such context key: {key!r}")
+
     # ---- task mutators --------------------------------------------------- #
 
     def add_task(self, task: dict[str, Any]) -> dict[str, Any]:
@@ -784,10 +807,17 @@ class Plan:
 
     def remove_task(self, task_id: str) -> dict[str, Any]:
         """Remove a task (reconciling a deletion from the Markdown view) and return
-        it. Raises ``KeyError`` on an unknown id so a mistyped id fails loudly
-        rather than silently doing nothing."""
+        it. Also drops the outputs **only this task produced** — once their single
+        producer is gone nothing can produce them, so leaving them would dangle
+        (``validate`` flags an output whose ``producedByTaskId`` is unknown). This
+        keeps the ledger coherent after an edit; any downstream task that still
+        consumes a dropped key then surfaces via :meth:`task_consume_gaps` for the
+        edit flow to repair. Raises ``KeyError`` on an unknown id so a mistyped id
+        fails loudly rather than silently doing nothing."""
         task = self._require_task(task_id)
         self.tasks.remove(task)
+        for art in [a for a in self.outputs if a.get("producedByTaskId") == task_id]:
+            self.outputs.remove(art)
         return task
 
     # ---- output ledger --------------------------------------------------- #
@@ -890,6 +920,23 @@ class Plan:
         candidates = [
             t for t in self.tasks
             if PRIMARY_ENVIRONMENT_KEY in (t.get("produces") or [])
+        ]
+        if not candidates:
+            return None
+        for t in candidates:
+            if t.get("state") != "Completed":
+                return t["id"]
+        return candidates[0]["id"]
+
+    def discover_task_id(self) -> str | None:
+        """The plan's discover task id — the task that **produces** the tenant
+        inventory (`tenantInventory`), i.e. the ``/discover`` task. Prefers the
+        first not-yet-Completed such task, else the first one; ``None`` if no task
+        produces it. Keyed on the grounded ``produces`` signal, mirroring
+        :meth:`setup_task_id` — never on any execution-hint field."""
+        candidates = [
+            t for t in self.tasks
+            if TENANT_INVENTORY_KEY in (t.get("produces") or [])
         ]
         if not candidates:
             return None
@@ -1053,6 +1100,27 @@ class Plan:
                 unmet.append(edge)
                 seen.add(pair)
         return unmet
+
+    def task_consume_gaps(self) -> list[dict[str, Any]]:
+        """Whole-plan task-graph coherence check: every key a task **consumes**
+        should be **produced** by some task on the plan (or already pinned as an
+        Active output). A consumed key with neither is a *dangling consume* — the
+        task is blocked forever, which after an edit usually means its producer
+        was removed (re-add it) or the consumer is now out of scope (remove it).
+
+        Returns one ``{"task", "title", "missing"}`` entry per gap, in task order.
+        Built on :meth:`blocking_inputs`, whose producer list is empty exactly
+        when no task produces the (still-unpinned) key — that empty list is the
+        dangling-consume signal."""
+        gaps: list[dict[str, Any]] = []
+        for task in self.tasks:
+            tid = task.get("id", "")
+            for key, producers in self.blocking_inputs(tid).items():
+                if not producers:
+                    gaps.append(
+                        {"task": tid, "title": task.get("title", ""), "missing": key}
+                    )
+        return gaps
 
     # ---- uploaded-plan ingestion & gap analysis ------------------------- #
 
@@ -1806,6 +1874,62 @@ class Plan:
         if self.waiting_on(task.get("id")):
             return "🔒 Not started"
         return "⬜ Not started"
+
+    def _task_state_icon(self, task: dict[str, Any]) -> str:
+        """Just the state glyph behind :meth:`_task_state_label` — ``✅`` complete,
+        ``🔄`` in progress, ``🔒`` blocked or dependency-locked, ``⬜`` ready/not
+        started. Shared by the plan table and the chat task checklist so both
+        views speak one icon vocabulary. Pure/read-only."""
+        state = task.get("state") or "NotStarted"
+        if state == "Completed":
+            return "✅"
+        if state == "InProgress":
+            return "🔄"
+        if state == "Blocked":
+            return "🔒"
+        if self.waiting_on(task.get("id")):
+            return "🔒"
+        return "⬜"
+
+    def render_task_checklist(self) -> str:
+        """The chat-facing task readback the maker sees the moment a plan is saved
+        or changed: the same tasks as the plan's Tasks table, grouped by
+        workstream, but as a scannable checklist — ``<state-icon> <title> —
+        <role>`` per line — so the assistant renders the breakdown inline instead
+        of collapsing it to a bare count ("N tasks across M workstreams"). Reuses
+        :meth:`ordered_tasks` and the table's stream bucketing, so execution order
+        and the dependency lock (``🔒``) match the table exactly; a render-time
+        convenience that mutates nothing. Returns ``""`` when the plan has no
+        tasks (nothing to read back)."""
+        if not self.tasks:
+            return ""
+        ordered = self.ordered_tasks()
+        lines: list[str] = []
+
+        def emit(tasks: list[dict[str, Any]]) -> None:
+            for task in tasks:
+                lines.append(
+                    f"- {self._task_state_icon(task)} {task.get('title')} "
+                    f"— {_render_assignee(task.get('assignedTo'))}"
+                )
+
+        if any((t.get("stream") or "").strip() for t in ordered):
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            stream_order: list[str] = []
+            for task in ordered:
+                label = (task.get("stream") or "").strip() or "Other"
+                if label not in buckets:
+                    buckets[label] = []
+                    stream_order.append(label)
+                buckets[label].append(task)
+            for index, label in enumerate(stream_order):
+                if index:
+                    lines.append("")
+                lines.append(f"**{label}**")
+                emit(buckets[label])
+        else:
+            emit(ordered)
+        return "\n".join(lines)
 
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]
