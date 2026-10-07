@@ -155,6 +155,73 @@ def test_capture_setup_dry_run_saves_nothing(tmp_path, capsys):
     assert Plan.load(plan_path).output("primaryEnvironment") is None  # nothing pinned
 
 
+def test_capture_setup_completes_every_task_the_run_produced(tmp_path, capsys):
+    """A single /setup run records the environment AND clones the agent, so
+    `capture-setup --complete` must close BOTH the environment task and the
+    base-agent task when the plan splits them — not just the triggered one."""
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "setup": "complete",
+            "dataverseEndpoint": "https://org.crm.dynamics.com",
+            "environmentId": "env-123",
+            "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
+        }),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Onboard the ADK (run /setup)", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Install the base agent",
+         "--description", "Clone the ESS base agent", "--role", "env-maker",
+         "--produces", "essAgent", "--consumes", "primaryEnvironment")
+    capsys.readouterr()
+
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1",
+              "--config", str(config_path), "--before", "{}", "--complete")
+    assert rc == 0
+    err = capsys.readouterr().err
+    assert "Also completed" in err and "T2" in err  # the base-agent task, same run
+
+    plan = Plan.load(plan_path)
+    assert plan.task("T1")["state"] == "Completed"   # the triggered task
+    assert plan.task("T2")["state"] == "Completed"   # closed by the same /setup run
+
+
+def test_capture_setup_leaves_unrelated_tasks_open(tmp_path, capsys):
+    """The cascade is scoped to what the run produced: a task whose `produces`
+    the run did NOT satisfy stays open."""
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({
+            "setup": "complete",
+            "dataverseEndpoint": "https://org.crm.dynamics.com",
+            "environmentId": "env-123",
+            "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
+        }),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Onboard the ADK (run /setup)", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T9", "--title", "Connect Workday",
+         "--description", "Run /connect", "--role", "env-maker",
+         "--produces", "workdayConnection", "--consumes", "primaryEnvironment")
+    capsys.readouterr()
+
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1",
+              "--config", str(config_path), "--before", "{}", "--complete")
+    assert rc == 0
+
+    plan = Plan.load(plan_path)
+    assert plan.task("T1")["state"] == "Completed"
+    assert plan.task("T9")["state"] != "Completed"   # /setup didn't produce workdayConnection
+
+
 def test_summary_is_read_only(tmp_path):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")

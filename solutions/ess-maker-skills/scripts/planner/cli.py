@@ -335,6 +335,12 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     Reads the current .local/config.json as the "after" snapshot; the "before"
     is empty (setup has just run). The skill confirms with the assignee before
     this is called, then shows the pinned artifact(s).
+
+    With ``--complete``, one run can close **more than one** task: beyond the
+    named/auto-detected task, every other plan task whose declared ``produces``
+    the run fully satisfied is also marked Completed (e.g. a single ``/setup``
+    run closes both the environment task and the base-agent task when the plan
+    splits them).
     """
     plan = _load(args)
     task_id = args.task or plan.setup_task_id()
@@ -375,6 +381,26 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
             )
         else:
             plan.set_task_state(task_id, "Completed")
+        # One skill run can satisfy several plan tasks — e.g. /setup both records
+        # the environment (primaryEnvironment) AND clones the agent (essAgent). If
+        # the plan splits those into separate tasks, close every OTHER task this
+        # run fully produced too, so running the skill completes all the tasks it
+        # covers, not just the one that triggered the capture.
+        pinned_keys = {a["key"] for a in pinned}
+        also_completed: list[str] = []
+        for t in plan.tasks:
+            tid = t["id"]
+            if tid == task_id or t.get("state") == "Completed":
+                continue
+            produces = t.get("produces") or []
+            if any(k in pinned_keys for k in produces) and not plan.unresolved_produces(tid):
+                plan.set_task_state(tid, "Completed")
+                also_completed.append(tid)
+        if also_completed:
+            print(
+                "Also completed (produced by this run): " + ", ".join(also_completed),
+                file=sys.stderr,
+            )
     _save(plan, args)
     print(json.dumps(pinned, indent=2))
     return 0 if complete_ok else 1
@@ -948,7 +974,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="setup system whose checklist to decompose (default: workday)")
     p.add_argument("--skip-foundation", action="store_true",
                    help="drop the shared foundation groups (Power Platform environment + "
-                        "ESS base agent) already produced by the backbone 'Run setup' task")
+                        "ESS base agent) already produced by the backbone 'Set up the "
+                        "environment' (/setup) task")
     p.add_argument("--commands", action="store_true",
                    help="print copy-paste add-task command lines instead of JSON")
     p.set_defaults(func=cmd_setup_tasks)

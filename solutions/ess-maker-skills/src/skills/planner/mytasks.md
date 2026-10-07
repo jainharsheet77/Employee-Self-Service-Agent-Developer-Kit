@@ -86,6 +86,9 @@ by the task's kind:
    detailed, current, per-tenant steps (that's exactly why `/connect` and `/setup`
    are rich). Read that skill's `SKILL.md` and follow it; don't re-summarise its
    steps from memory. The skill *is* the how-to. (E.g. "create a topic" → `/create`.)
+   When the skill finishes, you (the planner) capture its outputs (`capture.md`) —
+   and one run can close **more than one** task: a single `/setup` completes both
+   the environment task and the base-agent task when the plan splits them.
 
 2. **The task is a portal / manual step** with no kit skill (register an Entra app,
    provision the Power Platform environment, publish the agent): **fetch the how-to

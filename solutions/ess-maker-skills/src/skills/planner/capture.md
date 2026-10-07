@@ -32,7 +32,10 @@ pin from what changed — e.g. an `Environment` (the `environmentId` + URL), an
 id + name object a skill wrote (a `Connection`, an `EntraApp`, or an unknown
 shape captured as `Custom`). Known shapes get a nice kind/key; everything else is
 captured generically. Show the assignee the detected values and confirm before
-they're saved. `--complete` also marks the Task done. (Artifacts a skill writes
+they're saved. `--complete` marks the Task done — **and every other plan task this
+run fully produced**: a single `/setup` run records the environment *and* clones
+the agent, so it also completes the base-agent task when the plan splits them (one
+run → one *or more* tasks closed). (Artifacts a skill writes
 *outside* `config.json` are handled by ask-mode `pin-output` or their own
 detectors — see below.)
 
