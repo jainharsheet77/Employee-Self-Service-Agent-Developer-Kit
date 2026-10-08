@@ -32,6 +32,7 @@ Vocabulary bridges handled here:
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from planner.plan_model import (
@@ -393,6 +394,49 @@ def _output_from_remote(artifact: dict[str, Any]) -> dict[str, Any]:
         source="Agent",
         state=state,
     )
+
+
+def extract_json_payload(text: str) -> Any:
+    """Return the payload JSON from a (possibly enveloped) tool-result dump.
+
+    When a planner tool's result is large, the Copilot CLI spills it to a temp
+    file as the structured payload followed by a *second* top-level
+    ``{"result": "<stringified payload>"}`` document — both carry identical data.
+    A single-document parser (PowerShell's ``ConvertFrom-Json`` or a bare
+    ``json.loads``) chokes on that concatenation ("Additional text encountered
+    after finished reading JSON content"), which is why the sync flow must not
+    hand-stitch the ``{plan, tasks}`` object itself. This reads the first complete
+    JSON value and ignores any trailing envelope, so raw tool-output files can be
+    fed straight to ``import-remote-plan``.
+
+    If the first document is itself a lone ``{"result": ...}`` envelope (the inner
+    payload may be a nested object or a JSON-encoded string), it is unwrapped.
+    """
+    decoder = json.JSONDecoder()
+    index, length = 0, len(text)
+    # Tolerate a leading BOM and surrounding whitespace before the first value.
+    while index < length and text[index] in " \t\r\n\ufeff":
+        index += 1
+    if index >= length:
+        raise ValueError("tool output contained no JSON")
+    try:
+        value, _ = decoder.raw_decode(text, index)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"could not parse JSON from tool output: {exc}") from exc
+    return _unwrap_result_envelope(value)
+
+
+def _unwrap_result_envelope(value: Any) -> Any:
+    """Unwrap a lone ``{"result": <payload>}`` harness envelope (string or object)."""
+    if isinstance(value, dict) and set(value) == {"result"}:
+        inner = value["result"]
+        if isinstance(inner, str):
+            try:
+                return json.loads(inner)
+            except json.JSONDecodeError:
+                return inner
+        return inner
+    return value
 
 
 def hydrate_from_remote(

@@ -503,6 +503,81 @@ def test_cli_import_remote_plan_roundtrip(tmp_path):
     assert (tmp_path / "ESS-scenario-plan.md").exists()
 
 
+def _tool_dump(payload) -> str:
+    """Mimic a Copilot CLI tool-result spill: the payload followed by the trailing
+    ``{"result": "<stringified payload>"}`` envelope the runtime appends."""
+    return json.dumps(payload) + "\n" + json.dumps({"result": json.dumps(payload)})
+
+
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ('{"a": 1}', {"a": 1}),
+        ('  \n  {"a": 1}', {"a": 1}),
+        ('\ufeff{"a": 1}', {"a": 1}),
+        # Payload followed by the trailing {"result": "<stringified>"} envelope.
+        ('{"a": 1}\n{"result": "{\\"a\\": 1}"}', {"a": 1}),
+        # A lone envelope (object or JSON-encoded string) is unwrapped.
+        ('{"result": {"a": 1}}', {"a": 1}),
+        ('{"result": "{\\"a\\": 1}"}', {"a": 1}),
+    ],
+)
+def test_extract_json_payload(text, expected):
+    assert sync.extract_json_payload(text) == expected
+
+
+def test_extract_json_payload_keeps_plan_tasks_object():
+    # A {plan, tasks} combined object is not a lone {"result": ...} envelope, so it
+    # must pass through untouched.
+    obj = {"plan": {"planId": "p"}, "tasks": {"value": []}}
+    assert sync.extract_json_payload(json.dumps(obj)) == obj
+
+
+def test_extract_json_payload_rejects_empty():
+    with pytest.raises(ValueError):
+        sync.extract_json_payload("   ")
+
+
+def test_cli_import_remote_plan_from_tool_dumps(tmp_path):
+    # The raw get_project_plan / list_project_plan_tasks dumps each carry a trailing
+    # envelope; the CLI must extract the payload without a hand-built {plan, tasks}.
+    plan_path = str(tmp_path / "plan.json")
+    plan_file = tmp_path / "plan.dump.txt"
+    tasks_file = tmp_path / "tasks.dump.txt"
+    plan_file.write_text(_tool_dump(_remote_plan()), encoding="utf-8")
+    tasks_file.write_text(_tool_dump(_remote_tasks()), encoding="utf-8")
+
+    assert _run(
+        "--plan", plan_path, "import-remote-plan",
+        "--plan-file", str(plan_file), "--tasks-file", str(tasks_file),
+    ) == 0
+    plan = Plan.load(plan_path)
+    assert plan.data["planId"] == "plan-1"
+    assert {t["id"] for t in plan.tasks} == {"rt-1", "rt-2"}
+
+
+def test_cli_import_remote_plan_input_tolerates_envelope(tmp_path):
+    # Even the combined --input path is read past a trailing envelope.
+    plan_path = str(tmp_path / "plan.json")
+    input_file = tmp_path / "remote.json"
+    input_file.write_text(
+        _tool_dump({"plan": _remote_plan(), "tasks": _remote_tasks()}),
+        encoding="utf-8",
+    )
+    assert _run("--plan", plan_path, "import-remote-plan", "--input", str(input_file)) == 0
+    assert Plan.load(plan_path).data["planId"] == "plan-1"
+
+
+def test_cli_import_remote_plan_tasks_file_requires_plan_file(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    tasks_file = tmp_path / "tasks.dump.txt"
+    tasks_file.write_text(_tool_dump(_remote_tasks()), encoding="utf-8")
+    assert _run(
+        "--plan", plan_path, "import-remote-plan", "--tasks-file", str(tasks_file),
+    ) == 1
+    assert "requires --plan-file" in capsys.readouterr().err
+
+
 def test_cli_stamp_remote(tmp_path):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")

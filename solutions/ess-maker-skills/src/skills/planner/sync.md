@@ -15,6 +15,16 @@ authored plan as one object.
   CLI (`scripts/planner/cli.py`) only reads/writes the local cache. The planner
   tools only talk to the service. You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
+- **Importing: hand each tool result to the CLI as its own file — never splice
+  them yourself.** Re-hydrating always means
+  `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`,
+  pointing each flag at the file holding that tool's result (the temp file the
+  runtime saves a large result to, or a file you write the result to). **Do not**
+  build a combined `{plan, tasks}` object or pipe the results through PowerShell
+  `ConvertFrom-Json`/`ConvertTo-Json`: a large tool result is stored as the
+  payload followed by a trailing `{"result": …}` envelope, so a single-document
+  JSON parser fails with *"Additional text encountered after finished reading
+  JSON content"*. The CLI extracts the payload past that envelope for you.
 
 **Sign-in is the tool's job — never ask the sponsor whether to sign in.** Each
 planner tool authenticates itself, and on an expired/rejected token (a 401) it
@@ -87,13 +97,11 @@ Run this the moment `/planner` starts, before deciding whether to interview:
    it:
    1. **`get_project_plan`** (`projectId`, `planId`) — the plan entity.
    2. **`list_project_plan_tasks`** (`projectId`, `planId`) — its tasks.
-   3. Write the two results into a temp file as one object:
-      `{"plan": <get_project_plan result>, "tasks": <list_project_plan_tasks result>}`
-      at `workspace/plan/.remote.json`.
-   4. Hydrate the cache:
-      `python scripts/planner/cli.py import-remote-plan --input workspace/plan/.remote.json`
-      then delete the temp file.
-   5. Resume from the refreshed cache (`summary`, Flow 2, next actions) exactly as
+   3. Hydrate the cache by handing each result to the CLI as its own file (see
+      the import rule above — do **not** hand-stitch a `{plan, tasks}` object or
+      run the results through PowerShell JSON cmdlets):
+      `python scripts/planner/cli.py import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`
+   4. Resume from the refreshed cache (`summary`, Flow 2, next actions) exactly as
       the **First** section of `SKILL.md` describes.
 3. **If the service has no plan but a local `plan.json` exists**, it's an
    un-pushed draft — resume it locally and, once the sponsor is happy, **push** it
@@ -147,10 +155,11 @@ interview → model), publish it in **one** create call rather than task-by-task
    Activation is therefore an explicit step you take yourself, once the sponsor
    confirms the plan is ready to run (step 6). Do **not** activate here.
 4. **Re-hydrate so the cache carries the server ids** (planId, task ids, etag):
-   `get_project_plan` + `list_project_plan_tasks` → write
-   `{"plan": <get_project_plan result>, "tasks": <list_project_plan_tasks result>}`
-   to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
-   the temp file. The plan is now cached as **Draft** with real ids.
+   `get_project_plan` + `list_project_plan_tasks`, then hand each result to
+   `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`
+   (one file per flag — never hand-stitch a combined object or run the results
+   through PowerShell JSON cmdlets; the CLI strips the trailing `{"result": …}`
+   envelope itself). The plan is now cached as **Draft** with real ids.
 5. **Show the plan and ask the sponsor whether to activate it.** Present the plan
    and offer the Markdown for them to **download and review** — render its clickable
    link in chat first (the `summary` command prints the exact
