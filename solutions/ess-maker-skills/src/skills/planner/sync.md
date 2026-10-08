@@ -231,6 +231,15 @@ token, so:
   caller holds are evident from the pooled tasks it returns, so state them in
   plain language ("you hold the Power Platform admin role") — **never ask "which
   role(s) do you hold?"**.
+- **Call out a first-run setup plainly.** If what comes back includes the caller's
+  **setup task** (the one that stands up the environment) still open and no
+  environment is on the plan yet, that is their first step — tell them to run
+  `/setup` **now** (their first-run experience). `task-brief --task <setupTaskId>`
+  flags this as the first-run setup. When they return having run it, capture what
+  it produced (`src/skills/planner/capture.md`); and if the ESS agent install was
+  blocked so `/setup` couldn't finish, still persist the environment they created
+  (same file → *When `/setup` is blocked before it records the environment*) so
+  the plan carries it for everyone, while the setup task stays open.
 - **On failure, walk the sign-in ladder at the top of this file** and nothing
   else: a 401 → one MCP restart + one retry → then local; any other failure, or
   an unreachable service → local. A rejected call is **never** a cue to start

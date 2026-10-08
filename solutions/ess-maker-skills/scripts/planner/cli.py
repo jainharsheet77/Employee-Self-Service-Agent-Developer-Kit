@@ -583,6 +583,11 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     if brief.get("description"):
         print(f"  {brief['description']}")
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
+    if brief.get("firstRunSetup"):
+        print(
+            "  First-run setup: run /setup now to decide or create the "
+            "environment this plan runs on."
+        )
     nudge = brief.get("kitSetup")
     if nudge:
         env = nudge.get("environmentId") or nudge.get("environmentUrl") or "the plan's environment"

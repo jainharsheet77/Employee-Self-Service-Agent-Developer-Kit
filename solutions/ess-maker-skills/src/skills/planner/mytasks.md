@@ -82,9 +82,17 @@ python scripts/planner/cli.py task-brief --task <T#>
   kit: run /setup and choose environment `<envId>`". Nudge them to `/setup` into
   **that** environment (don't let them pick or create a different one), then they
   do their task.
-- **No environment pinned yet** → the admin's `/setup` task is the prerequisite;
-  the environment hasn't been decided. Don't nudge this person to setup — tell
-  them their task is blocked until setup runs, and who owns it.
+- **This person's own ready task IS the setup task** (it produces the environment
+  and none is pinned yet) → `task-brief` prints **"First-run setup: run /setup
+  now…"**. This is their first-run experience — tell them to run `/setup` now.
+  When they come back having run it, capture what it produced (Phase 6); and if
+  the ESS agent install was blocked so `/setup` couldn't finish, still persist the
+  environment they created (`src/skills/planner/capture.md` → *When `/setup` is
+  blocked before it records the environment*), keeping the setup task open.
+- **No environment pinned yet** (and this isn't their setup task) → the admin's
+  `/setup` task is the prerequisite; the environment hasn't been decided. Don't
+  nudge this person to setup — tell them their task is blocked until setup runs,
+  and who owns it.
 
 Present the result in plain language — role headings with their tasks beneath —
 not as raw output.
