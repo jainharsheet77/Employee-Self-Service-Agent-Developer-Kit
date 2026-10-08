@@ -26,8 +26,8 @@ Do not say "hello" or introduce yourself.
 Respond with ONLY this exact message and nothing else:
 
 > Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
-> just say **"set up ESS"**. It only takes a couple minutes.
+> your environment. In VS Code, type `/setup`; in the Copilot CLI, say
+> **`run setup`**. It only takes a couple minutes.
 
 **Plan already in progress — check this first.** If `workspace/plan/plan.json`
 exists, the maker already started an ESS plan (via `/planner` or the setup
@@ -35,14 +35,20 @@ choice), so do **not** show the welcome message and do **not** block on setup.
 Read `src/skills/planner/SKILL.md` and resume their plan — it pulls the latest
 state and shows what they can pick up next. The plan already carries the "run
 `/setup`" task for when an environment is actually needed. The only override: if
-the maker explicitly asks to run setup or connect now (`/setup`, "set up ESS",
+the maker explicitly asks to run setup or connect now (`/setup`, `run setup`,
 `/connect`), honor that instead.
 
-**The exceptions**: If the user typed `/setup` or explicitly asked to run setup
-(including "set up ESS" / "set up ESS for the first time"), proceed with setup —
-read `src/skills/foundation-setup/SKILL.md` and follow it. On a genuine first run
-that skill asks whether the maker wants to **plan the rollout** or **set up the
+**The exceptions**: If the user typed `/setup` or gave the direct setup
+invocation `run setup` (the Copilot CLI has no typed `/setup`, so `run setup` is
+its command-equivalent), proceed with setup — read
+`src/skills/foundation-setup/SKILL.md` and follow it. On a genuine first run that
+skill asks whether the maker wants to **plan the rollout** or **set up the
 environment now**, and hands off to the planner itself when they choose planning.
+An open-ended or exploratory setup phrasing that is **not** that direct
+invocation — "set up ESS", "I want to set up ESS", "set up ESS for the first
+time", "deploy ESS", "where do I start", "how do I get started" — is **not** a
+proceed trigger: fall through to the welcome message and ask the maker to run
+setup.
 
 If the user typed `/planner` or made an **explicit planning request** — "plan a
 rollout", "plan my ESS deployment", "create a plan", "scenario plan", or "what am
@@ -364,8 +370,10 @@ After a successful push, `.baseline/` is updated to match the new state.
 Workday/ServiceNow", "what am I assigned", "what are my tasks", "my tasks",
 "what's assigned to me". An **ambiguous first-time request** with no explicit
 "plan" intent — "where do I start", "how do I get started", "I want to deploy
-ESS", "set up ESS for the first time" — is **not** a direct planner trigger
-before setup: route it to setup, which offers the plan-vs-set-up choice and
+ESS", "set up ESS", "set up ESS for the first time" — is **not** a direct planner
+trigger and is **not** a direct setup trigger either: show the welcome and ask
+the maker to run setup. Only the `/setup` command (or the Copilot CLI's `run
+setup`) proceeds into setup, which then offers the plan-vs-set-up choice and
 hands off to the planner if the maker picks planning (see the first-run gate at
 the top of this file).
 

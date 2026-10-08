@@ -357,6 +357,102 @@ def test_set_state_completed_refused_with_unresolved_produces(tmp_path, capsys):
     assert Plan.load(plan_path).task("T1")["state"] != "Completed"
 
 
+# --- setup-status: the read-only guard shared by the /setup env-reuse offer and
+# --- the planner first-run-setup reconcile -------------------------------------
+
+def _setup_status(plan_path: str, capsys) -> dict:
+    """Run `setup-status` and return its parsed JSON (always exit 0 — a query)."""
+    capsys.readouterr()  # drain any prior command output so .out is just the JSON
+    assert _run("--plan", plan_path, "setup-status") == 0
+    return json.loads(capsys.readouterr().out)
+
+
+def test_setup_status_no_plan_is_safe_noop(tmp_path, capsys):
+    # A standalone caller (no plan yet) gets a well-formed "nothing here" status,
+    # not an error — so /setup and the planner can read it unconditionally.
+    status = _setup_status(str(tmp_path / "nope.json"), capsys)
+    assert status == {
+        "hasPlan": False,
+        "setupTaskId": None,
+        "setupTaskState": None,
+        "setupTaskOpen": False,
+        "environmentPinned": False,
+        "environment": None,
+    }
+
+
+def test_setup_status_reports_open_setup_task(tmp_path, capsys):
+    # The admin's setup task exists but hasn't been captured yet -> the planner
+    # reconcile guard must fire (setupTaskOpen) and /setup has no env to offer.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    status = _setup_status(plan_path, capsys)
+    assert status["hasPlan"] is True
+    assert status["setupTaskId"] == "T1"
+    assert status["setupTaskState"] == "NotStarted"
+    assert status["setupTaskOpen"] is True        # reconcile should run
+    assert status["environmentPinned"] is False   # nothing to offer yet
+    assert status["environment"] is None
+
+
+def test_setup_status_after_capture_is_closed_and_offers_env(tmp_path, capsys):
+    # Once the setup run is captured the task is Completed and the environment is
+    # pinned: the planner reconcile must now SKIP (idempotent — setupTaskOpen
+    # false, no re-pin churn) and /setup can offer the pinned environment.
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"setup": "complete",
+                    "dataverseEndpoint": "https://org.crm.dynamics.com",
+                    "environmentId": "env-123"}),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin",
+         "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "capture-setup", "--task", "T1", "--config", str(config_path),
+         "--before", "{}", "--complete")
+    capsys.readouterr()  # drain capture output
+
+    status = _setup_status(plan_path, capsys)
+    assert status["setupTaskState"] == "Completed"
+    assert status["setupTaskOpen"] is False       # reconcile skips -> no re-pin churn
+    assert status["environmentPinned"] is True
+    assert status["environment"]["environmentId"] == "env-123"
+    assert status["environment"]["environmentUrl"] == "https://org.crm.dynamics.com"
+
+
+def test_setup_status_plan_without_setup_task(tmp_path, capsys):
+    # A plan that doesn't model a setup task at all: no id, nothing open, nothing
+    # to offer — the guard reads false on every axis without erroring.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T9", "--title", "Connect Workday",
+         "--role", "env-maker", "--produces", "workdayConnection")
+    status = _setup_status(plan_path, capsys)
+    assert status["hasPlan"] is True
+    assert status["setupTaskId"] is None
+    assert status["setupTaskState"] is None
+    assert status["setupTaskOpen"] is False
+    assert status["environmentPinned"] is False
+    assert status["environment"] is None
+
+
+def test_setup_status_is_read_only(tmp_path):
+    # The guard is a pure read: it must never rewrite the plan or regenerate (and
+    # thereby clobber) the editable Markdown view.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    md = tmp_path / "ESS-scenario-plan.md"
+    md.write_text("MY UNRECONCILED EDITS", encoding="utf-8")
+    assert _run("--plan", plan_path, "setup-status") == 0
+    assert md.read_text(encoding="utf-8") == "MY UNRECONCILED EDITS"
+
+
 def test_save_refuses_invalid_plan_orphan_artifact(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")

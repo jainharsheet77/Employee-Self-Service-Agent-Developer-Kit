@@ -742,6 +742,53 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_setup_status(args: argparse.Namespace) -> int:
+    """**Read-only** snapshot of the plan's setup state, printed as JSON — the
+    pinned primary environment (if any) and whether the plan's ``/setup`` task is
+    still open. Never mutates or saves the plan (mirrors :func:`cmd_summary`).
+
+    Serves two callers that must not parse ``plan.json`` themselves:
+
+    * the ``/setup`` skill's cross-persona **environment-reuse offer** — once the
+      admin's setup task has pinned ``primaryEnvironment``, every other maker's
+      First-Run ``/setup`` can offer that same environment instead of asking them
+      to pick one. ``/setup`` stays plan-*unaware*: it only reads this status and
+      never writes the plan.
+    * the ``/planner`` reconcile **guard** — on resume / "what am I assigned?",
+      the planner folds a finished FRE setup into the plan via
+      ``capture-setup --complete`` ONLY while ``setupTaskOpen`` is true, so the
+      reconcile is idempotent and a completed setup task is never re-pinned on
+      every resume.
+
+    Safe no-op shape when there is no plan or no setup task (``hasPlan`` /
+    ``setupTaskOpen`` false, ``environment`` null) so a standalone caller gets a
+    well-formed status rather than an error. Always exits 0 — the absence of a
+    plan is a valid answer to a query, not a failure."""
+    plan = _load(args) if os.path.exists(args.plan) else None
+    setup_tid = plan.setup_task_id() if plan else None
+    setup_task = plan.task(setup_tid) if (plan and setup_tid) else None
+    setup_state = setup_task.get("state") if setup_task else None
+    env = plan.output(args.key) if plan else None
+    env_attrs = (env.get("attributes") or {}) if env else {}
+    status = {
+        "hasPlan": plan is not None,
+        "setupTaskId": setup_tid,
+        "setupTaskState": setup_state,
+        # Reconcile guard: fold a finished FRE setup into the plan only while the
+        # setup task is still open; once Completed, skip so repeated resumes never
+        # re-pin the environment (churn-free idempotency).
+        "setupTaskOpen": bool(setup_tid) and setup_state != "Completed",
+        "environmentPinned": env is not None,
+        "environment": {
+            "environmentId": env_attrs.get("environmentId", ""),
+            "environmentUrl": env_attrs.get("environmentUrl", ""),
+            "displayName": env_attrs.get("displayName") or env_attrs.get("name", ""),
+        } if env else None,
+    }
+    print(json.dumps(status, indent=2))
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     plan = _load(args)
     errors = plan.validate()
@@ -967,6 +1014,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", dest="dry_run", action="store_true", help="detect and print artifacts without saving (preview for confirm-before-pin)")
     p.add_argument("--complete", action="store_true", help="mark the task Completed")
     p.set_defaults(func=cmd_capture_setup)
+
+    p = sub.add_parser(
+        "setup-status",
+        help="read-only JSON: the plan's pinned primary environment + whether the /setup task is still "
+             "open (drives the /setup env-reuse offer and the planner reconcile guard)",
+    )
+    p.add_argument("--key", default="primaryEnvironment",
+                   help="environment ledger key to report (default: primaryEnvironment)")
+    p.set_defaults(func=cmd_setup_status)
 
     p = sub.add_parser("capture-discover", help="observe /discover output and pin the tenant inventory summary onto the plan")
     p.add_argument("--task", help="discover task id (default: auto-detect the plan's /discover task)")

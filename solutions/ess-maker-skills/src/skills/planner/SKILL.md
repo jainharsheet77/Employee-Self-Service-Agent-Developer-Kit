@@ -82,6 +82,18 @@ have checked for an existing plan.**
    (freshly pulled, or a local draft not yet pushed).
 2. **Once the plan is loaded, resume it — do not re-interview and do not ask for
    the objective again.**
+   - **Reconcile a finished first-run setup — invisibly, once.** The Power
+     Platform admin usually runs `/setup` as their first-run experience, so the
+     environment can already exist while the plan's setup task still reads Not
+     started. Before you show anything, read
+     `python scripts/planner/cli.py setup-status`: if it reports `setupTaskOpen`
+     **true** *and* `.local/config.json` shows setup complete, fold that finished
+     setup into the plan now — confirm the detected environment, then
+     `capture-setup --complete` — so the setup task (and anything else that run
+     produced) shows Complete before you present the plan
+     (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
+     ran*). If `setupTaskOpen` is **false**, it's already captured — skip silently;
+     never re-run `capture-setup`.
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
      produced so far. The task table's **State** column carries the render-time

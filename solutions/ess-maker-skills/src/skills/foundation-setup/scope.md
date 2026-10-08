@@ -3,6 +3,46 @@
 
 Use `vscode_askQuestions` to collect and lock one target environment.
 
+0. **First, offer the environment already created for this ESS deployment.**
+   Before asking how to choose an environment, check whether the plan already
+   records one. The Power Platform admin's setup task pins the environment the
+   whole deployment uses, and every other maker should connect their kit to
+   **that** environment rather than pick or create a new one. Read it — this is
+   **read-only** and never writes the plan (`/setup` stays plan-unaware; the
+   planner records task completion separately):
+
+   ```text
+   python scripts/planner/cli.py setup-status
+   ```
+
+   Parse the printed JSON. If `environmentPinned` is **false** (or there is no
+   plan), say nothing about a pinned environment and continue to step 1. If
+   `environmentPinned` is **true**, read `environment.environmentUrl`,
+   `environment.environmentId`, and `environment.displayName`, and offer to reuse
+   it:
+
+   ```json
+   [
+     {
+       "header": "Use the ESS deployment's environment?",
+       "question": "An environment was already set up for this ESS deployment: **{displayName or environmentId}** ({environmentUrl}). Connect this kit to that same environment?",
+       "options": [
+         { "label": "Yes, use this environment", "description": "Connect to the environment the deployment already uses: {environmentUrl}" },
+         { "label": "No, choose a different one", "description": "Pick or create another Power Platform environment" }
+       ],
+       "allowFreeformInput": false
+     }
+   ]
+   ```
+
+   - **Yes, use this environment** → treat `environment.environmentUrl` as the
+     manually-entered environment URL (strip any trailing slash) and skip the
+     choice in step 1: continue exactly as manual entry — step 5 (verify the
+     maker's role), then step 6 (resolve metadata), then persist the scope. Do
+     **not** write anything back to the plan here.
+   - **No, choose a different one** → continue to step 1 and let them choose or
+     create an environment.
+
 1. First ask how the maker wants to provide the environment:
 
    ```json
