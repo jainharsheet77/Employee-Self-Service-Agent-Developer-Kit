@@ -436,9 +436,14 @@ class PlannerMixin:
             # assignedToRoleId (see scripts/planner/sync.py), so matching the
             # role id alone would surface work owned by someone else to every
             # other holder of that role; require the open Role-typed pool too.
+            # The assignee type is queryable on the PlanTask read model only as
+            # the nested assignedTo/type principal field. The flat
+            # assignedToType lives on the write DTO (TaskCreateRequest) alone,
+            # so filtering on it is rejected by the service as an unknown
+            # property.
             clauses.append(
                 f"(assignedToRoleId eq '{_escape_odata_literal(role_id, 'roleId')}' "
-                "and assignedToType eq 'Role')"
+                "and assignedTo/type eq 'Role')"
             )
         caller_filter = " or ".join(clauses)
         # Completed work is history, not something the caller can pick up

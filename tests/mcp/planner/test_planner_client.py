@@ -274,10 +274,14 @@ def test_task_caller_scoping_expands_to_caller_direct_and_active_roles(
     assert len(task_calls) == 1
     assert task_calls[0].url.params["$filter"] == (
         f"(assignedToId eq '{CALLER_OID}' "
-        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedToType eq 'Role') "
-        "or (assignedToRoleId eq 'WorkdayAdmin' and assignedToType eq 'Role')) "
+        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedTo/type eq 'Role') "
+        "or (assignedToRoleId eq 'WorkdayAdmin' and assignedTo/type eq 'Role')) "
         "and state ne 'Completed'"
     )
+    # Regression guard: the assignee type must be the nested read-model field
+    # (assignedTo/type), never the write-only flat assignedToType, which the
+    # service rejects as an unknown PlanTask property.
+    assert "assignedToType" not in task_calls[0].url.params["$filter"]
 
 
 def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> None:
@@ -303,7 +307,7 @@ def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> No
     task_call = next(r for r in requests if "agentPlanTasks" in str(r.url))
     assert task_call.url.params["$filter"] == (
         f"((assignedToId eq '{CALLER_OID}' "
-        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedToType eq 'Role')) "
+        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedTo/type eq 'Role')) "
         "and state ne 'Completed') "
         "and (state eq 'InProgress')"
     )
