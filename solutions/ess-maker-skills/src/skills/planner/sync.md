@@ -204,8 +204,27 @@ After a batch of edits, re-pull (`get_project_plan` + `list_project_plan_tasks` 
 
 ## Flow 2 — "what am I assigned?" is answered by the service
 
-The service stores the role→person mapping and filters tasks by the caller's
-roles. So for "what are my tasks?", call **`list_project_plan_tasks_for_caller`**
-(`projectId`, `planId`) and present exactly what it returns — do not re-derive
-role gating locally. Only fall back to the local `mine` command
-(`src/skills/planner/mytasks.md`) when the service is unreachable.
+The service stores the role→person mapping and scopes tasks to the caller
+itself. So for "what are my tasks?", make **one** call —
+**`list_project_plan_tasks_for_caller`** with just `projectId` and `planId` — and
+present exactly what it returns. The caller's identity comes from the signed-in
+token, so:
+
+- **Pass no identity, and don't go looking for one.** Never pass, resolve, or
+  guess the caller's object id (`subjectId`); never call
+  `list_plan_role_assignments` to find yourself; never list the plan's
+  assignments to hunt for your own id; never read the project's owner id as if it
+  were the caller. The tool already knows who you are.
+- **Don't re-derive role gating locally.** What comes back already includes both
+  the tasks assigned directly to the caller *and* the tasks pooled to every role
+  they hold — the service expands the caller's roles server-side (attesting a
+  person into a role is what makes that role's pooled tasks appear). The roles the
+  caller holds are evident from the pooled tasks it returns, so state them in
+  plain language ("you hold the Power Platform admin role") — **never ask "which
+  role(s) do you hold?"**.
+- **On failure, walk the sign-in ladder at the top of this file** and nothing
+  else: a 401 → one MCP restart + one retry → then local; any other failure, or
+  an unreachable service → local. A rejected call is **never** a cue to start
+  asking the person for their roles, guessing ids, or listing assignments. Fall
+  back to the local `mine` command (`src/skills/planner/mytasks.md`) only, and
+  only when the service is genuinely unreachable.

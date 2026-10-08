@@ -3,6 +3,16 @@
 When a person asks what work is waiting on them, show their Tasks **grouped by
 each role they hold** — which naturally covers a person with more than one role.
 
+> **This is the local, service-unreachable fallback — not the primary path.**
+> When the shared planner is reachable, "what are my tasks?" is answered by a
+> single `list_project_plan_tasks_for_caller` call that scopes to the caller by
+> their signed-in identity and returns their direct *and* role-pooled tasks
+> (`src/skills/planner/sync.md`, Flow 2). On that path you **never** resolve a
+> `subjectId`, list role assignments, or ask the person which roles they hold —
+> the service already knows who they are and expands their roles for you. Drop to
+> the steps below **only** when the service is genuinely unreachable and you must
+> read the local cache instead.
+
 ## Steps
 
 0. **Reconcile a finished first-run setup — once.** Before listing anyone's
@@ -14,11 +24,16 @@ each role they hold** — which naturally covers a person with more than one rol
    (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
    ran*). If `setupTaskOpen` is **false**, there's nothing to reconcile —
    continue.
-1. **Find the person's roles.** The roles source is a separate, unbuilt system,
-   so this is best-effort:
-   - If a roles source is wired, look up the roles this person holds.
-   - If not, resolve the caller's identity (e.g. via Work IQ `/me`) and/or ask
-     them to confirm which of the plan's roles are theirs.
+1. **Find the person's roles — offline, so best-effort.** You're here only
+   because the service (which would scope to the caller and expand their roles
+   for you) is unreachable, so the attested role→person mapping can't be read
+   right now. In this order:
+   - Prefer what's already in hand — if the caller's identity and the roles they
+     hold are known from this session or the local plan, use those.
+   - Otherwise resolve the caller's identity (e.g. via Work IQ `/me`) and, **only
+     as a last resort**, ask them to confirm which of the plan's roles are theirs.
+   Never block on it: if roles stay unknown, show the tasks assigned to them
+   directly and note that the role-pooled view needs the shared planner.
 2. **Show their Tasks, grouped by role:**
 
    ```
