@@ -111,8 +111,9 @@ def test_export_assignee_pool():
         new_task("x", "t", assigned_to=principal_pool("WorkdayAdmin"))
     )
     assert body["assignedToType"] == "Role"
-    assert body["assignedToId"] == "WorkdayAdmin"
-    assert body["assignedToRoleId"] == "WorkdayAdmin"
+    # Exported as the backend wire display name so it matches the attestation grant.
+    assert body["assignedToId"] == "Workday administrator"
+    assert body["assignedToRoleId"] == "Workday administrator"
 
 
 def test_export_assignee_person_for_role():
@@ -120,9 +121,30 @@ def test_export_assignee_person_for_role():
         new_task("x", "t", assigned_to=principal_person(PAUL, "ServiceNowAdmin"))
     )
     assert body["assignedToId"] == PAUL
-    assert body["assignedToRoleId"] == "ServiceNowAdmin"
+    # The grounding role rides along as the wire display name too, for parity.
+    assert body["assignedToRoleId"] == "ServiceNow Administrator"
     # A person owner leaves assignedToType implicit (defaults to User server-side).
     assert "assignedToType" not in body
+
+
+def test_export_assignee_pool_canonicalizes_compact_to_wire():
+    # The live defect: a pooled task stored with the compact id must go out as the
+    # wire display name, or the service's caller-expansion never matches the grant.
+    body = sync.to_remote_task_body(
+        new_task("x", "t", assigned_to=principal_pool("EntraPowerPlatformAdministrator"))
+    )
+    assert body["assignedToId"] == "Power Platform Administrator"
+    assert body["assignedToRoleId"] == "Power Platform Administrator"
+
+
+def test_export_assignee_pool_passes_non_attestable_role_through():
+    # A role outside the closed attestable set can't be canonicalized; keep it
+    # verbatim rather than silently dropping the maker's intent.
+    body = sync.to_remote_task_body(
+        new_task("x", "t", assigned_to=principal_pool("SomeFutureRole"))
+    )
+    assert body["assignedToId"] == "SomeFutureRole"
+    assert body["assignedToRoleId"] == "SomeFutureRole"
 
 
 def test_export_assignee_plain_person():
@@ -266,6 +288,36 @@ def test_hydrate_pool_from_flat_fields_only():
     data = sync.hydrate_from_remote(_remote_plan(), tasks)
     principal = data["tasks"][0]["assignedTo"]
     assert principal["type"] == "Role" and principal["role"]["roleId"] == "WorkdayAdmin"
+
+
+def test_hydrate_pool_normalizes_wire_name_to_compact():
+    # The service returns the wire display name; the local model keys roles by the
+    # compact id (local matching is an exact string compare), so fold it home.
+    tasks = [
+        {
+            "taskId": "rt-pp",
+            "title": "t",
+            "assignedTo": {"type": "Role", "id": "Power Platform Administrator"},
+            "assignedToRoleId": "Power Platform Administrator",
+        }
+    ]
+    data = sync.hydrate_from_remote(_remote_plan(), tasks)
+    principal = data["tasks"][0]["assignedTo"]
+    assert principal["type"] == "Role"
+    assert principal["role"]["roleId"] == "EntraPowerPlatformAdministrator"
+
+
+def test_role_pool_survives_export_import_round_trip_as_compact():
+    # Local compact id -> export wire name -> import back to the same compact id,
+    # so a published-and-rehydrated plan stays uniform for local role matching.
+    body = sync.to_remote_task_body(
+        new_task("rt", "t", assigned_to=principal_pool("EntraPowerPlatformAdministrator"))
+    )
+    assert body["assignedToId"] == "Power Platform Administrator"
+    remote = {"taskId": "rt", "title": "t", **body}
+    data = sync.hydrate_from_remote(_remote_plan(), [remote])
+    principal = data["tasks"][0]["assignedTo"]
+    assert principal["role"]["roleId"] == "EntraPowerPlatformAdministrator"
 
 
 def test_hydrate_unassigned_task():

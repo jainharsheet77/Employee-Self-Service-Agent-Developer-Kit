@@ -37,7 +37,7 @@ from _odata import (  # noqa: E402
 )
 from base_client import AgentConfigApiError  # noqa: E402
 
-from roles_surface import ATTESTABLE_ROLES  # noqa: E402
+from roles_surface import ATTESTABLE_ROLES, resolve_attestable_role  # noqa: E402
 
 _AGENT_PROJECTS_COLLECTION = "me/agentConfigurationProjects"
 _PLANS_RESOURCE = "agentPlans"
@@ -466,11 +466,17 @@ class PlannerMixin:
             raise ValueError("role must be one of " + ", ".join(ATTESTABLE_ROLES))
         if not isinstance(title, str) or not title.strip():
             raise ValueError("title must be a non-empty string")
+        # Send the backend **wire display name**, not the compact id: the service
+        # stores attestation grants under the wire name (see ``attest_plan_role``)
+        # and its caller-task expansion compares the two with Ordinal equality, so
+        # a pooled task written with the compact id never surfaces to the role's
+        # attested holders.
+        wire_role, _provider = resolve_attestable_role(role)
         body: dict[str, Any] = {
             "title": title,
-            "assignedToId": role,
+            "assignedToId": wire_role,
             "assignedToType": "Role",
-            "assignedToRoleId": role,
+            "assignedToRoleId": wire_role,
         }
         if description is not None:
             body["description"] = description

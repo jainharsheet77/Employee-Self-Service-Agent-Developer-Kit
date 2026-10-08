@@ -323,11 +323,14 @@ def test_role_assigned_task_targets_a_role_pool(monkeypatch) -> None:
         ),
     )
 
+    # The compact id is accepted as input but written as the backend wire display
+    # name, so the pooled task matches the attestation grant (stored under the same
+    # wire name) and surfaces to the role's attested holders.
     assert json.loads(requests[0].content) == {
         "title": "Configure ServiceNow",
-        "assignedToId": "ServiceNowAdmin",
+        "assignedToId": "ServiceNow Administrator",
         "assignedToType": "Role",
-        "assignedToRoleId": "ServiceNowAdmin",
+        "assignedToRoleId": "ServiceNow Administrator",
     }
 
 
