@@ -74,11 +74,13 @@ python scripts/planner/cli.py setup-status
 ```
 
 It prints JSON: `setupTaskOpen` (the plan has a setup task that isn't Completed),
-`environmentPinned`, and the pinned `environment`. When **`setupTaskOpen` is
-true** *and* `.local/config.json` shows setup finished (an `environmentId` is
-present), the setup already ran but was never captured — reconcile it: preview
-with `capture-setup --dry-run`, confirm the detected environment with the person,
-then pin + complete it:
+`environmentPinned` (a reusable environment **URL** is on the plan), and the
+pinned `environment`. When **`setupTaskOpen` is true** *and* `.local/config.json`
+shows setup finished — `setup` is `"complete"` with a `dataverseEndpoint`
+recorded (`setup.py` writes those on a normal first run; it does **not** write an
+`environmentId`) — the setup already ran but was never captured — reconcile it:
+preview with `capture-setup --dry-run`, confirm the detected environment with the
+person, then pin + complete it:
 
 ```
 python scripts/planner/cli.py capture-setup --complete

@@ -442,6 +442,23 @@ def test_setup_status_plan_without_setup_task(tmp_path, capsys):
     assert status["environment"] is None
 
 
+def test_setup_status_environment_without_url_is_not_reusable(tmp_path, capsys):
+    # An Environment artifact can carry only an environmentId and no org URL
+    # (e.g. a plan synced from the planner service). The reuse path would feed an
+    # empty ENV_URL, so setup-status must NOT advertise it as reusable even though
+    # an environment output exists on the plan.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Set up the environment",
+         "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "pin-output", "--task", "T1", "--key", "primaryEnvironment",
+         "--kind", "Environment", "--attr", "environmentId=env-only")
+    status = _setup_status(plan_path, capsys)
+    assert status["environmentPinned"] is False            # no URL -> not reusable
+    assert status["environment"]["environmentId"] == "env-only"
+    assert status["environment"]["environmentUrl"] == ""   # nothing to offer
+
+
 def test_setup_status_is_read_only(tmp_path):
     # The guard is a pure read: it must never rewrite the plan or regenerate (and
     # thereby clobber) the editable Markdown view.

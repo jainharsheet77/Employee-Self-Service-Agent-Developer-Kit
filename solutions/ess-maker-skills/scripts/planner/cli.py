@@ -770,6 +770,12 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
     setup_state = setup_task.get("state") if setup_task else None
     env = plan.output(args.key) if plan else None
     env_attrs = (env.get("attributes") or {}) if env else {}
+    # An Environment artifact may carry only an environmentId and no org URL
+    # (e.g. a plan synced from the planner service). The /setup reuse path feeds
+    # this value straight into ENV_URL, so advertise the environment as reusable
+    # only when a non-empty URL is actually present — otherwise the offer would
+    # build requests against an empty endpoint.
+    env_url = (env_attrs.get("environmentUrl") or "").strip()
     status = {
         "hasPlan": plan is not None,
         "setupTaskId": setup_tid,
@@ -778,10 +784,10 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
         # setup task is still open; once Completed, skip so repeated resumes never
         # re-pin the environment (churn-free idempotency).
         "setupTaskOpen": bool(setup_tid) and setup_state != "Completed",
-        "environmentPinned": env is not None,
+        "environmentPinned": bool(env_url),
         "environment": {
             "environmentId": env_attrs.get("environmentId", ""),
-            "environmentUrl": env_attrs.get("environmentUrl", ""),
+            "environmentUrl": env_url,
             "displayName": env_attrs.get("displayName") or env_attrs.get("name", ""),
         } if env else None,
     }
