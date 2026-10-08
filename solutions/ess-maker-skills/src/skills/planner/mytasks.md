@@ -5,6 +5,15 @@ each role they hold** — which naturally covers a person with more than one rol
 
 ## Steps
 
+0. **Reconcile a finished first-run setup — once.** Before listing anyone's
+   tasks, fold in a setup that already ran as a first-run experience: if
+   `python scripts/planner/cli.py setup-status` reports `setupTaskOpen` **true**
+   and `.local/config.json` shows setup complete, confirm the detected
+   environment and run `capture-setup --complete` so the admin's setup task (and
+   anything else that run produced) shows Complete before you show the list
+   (`src/skills/planner/capture.md` → *Reconcile a first-run setup that already
+   ran*). If `setupTaskOpen` is **false**, there's nothing to reconcile —
+   continue.
 1. **Find the person's roles.** The roles source is a separate, unbuilt system,
    so this is best-effort:
    - If a roles source is wired, look up the roles this person holds.

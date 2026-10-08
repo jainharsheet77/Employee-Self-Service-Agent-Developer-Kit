@@ -60,6 +60,41 @@ task. It's a safe no-op (exit 1, nothing written) when the workspace has no plan
 task produces `tenantInventory`, so a standalone `/discover` leaves the plan untouched.
 You never pin `tenantInventory` by hand.
 
+## Reconcile a first-run setup that already ran
+
+On a shared agent the Power Platform admin usually runs `/setup` as their
+**first-run experience** — before, or outside, any planner session. So by the
+time anyone engages the planner the environment can already exist in
+`.local/config.json` while the plan's setup task still reads **Not started**.
+Fold that finished setup into the plan automatically — but **only once**. The
+guard is a read-only status probe:
+
+```
+python scripts/planner/cli.py setup-status
+```
+
+It prints JSON: `setupTaskOpen` (the plan has a setup task that isn't Completed),
+`environmentPinned` (a reusable environment **URL** is on the plan), and the
+pinned `environment`. When **`setupTaskOpen` is true** *and* `.local/config.json`
+shows setup finished — `setup` is `"complete"` with a `dataverseEndpoint`
+recorded (`setup.py` writes those on a normal first run; it does **not** write an
+`environmentId`) — the setup already ran but was never captured — reconcile it:
+preview with `capture-setup --dry-run`, confirm the detected environment with the
+person, then pin + complete it:
+
+```
+python scripts/planner/cli.py capture-setup --complete
+```
+
+That records `primaryEnvironment` (and the cloned agent) and marks the setup
+task — plus every other task this run fully produced — Complete, so from now on
+everyone sees that environment on the plan. When **`setupTaskOpen` is false** (no
+setup task, or it's already Completed) there is nothing to reconcile — **skip
+silently**; never re-run `capture-setup`, or it would re-pin the same environment
+on every engagement. This is the automatic complement to the manual "run this
+after `/setup` returns" above: the **same** command, fired by the `setup-status`
+guard on planner engagement instead of by a just-finished `/setup`.
+
 ## (b) Ask — the assignee tells you, then commit it
 
 For Tasks whose output isn't observable from local state — a Workday connection,

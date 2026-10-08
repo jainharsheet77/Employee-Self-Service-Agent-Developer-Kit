@@ -1,15 +1,15 @@
 ---
 name: planner
 description: >-
-  Plan an ESS rollout with the ESS Maker Kit from the Copilot CLI — the CLI equivalent of the kit's /planner command. Generate a grounded scenario plan and atomic, role-owned tasks, or answer "what am I assigned?". Use when the user asks to plan an ESS deployment, set up ESS for the first time, "where do I start / how do I get started", or types /planner. The planner is the one experience allowed before setup.
+  Plan an ESS rollout with the ESS Maker Kit from the Copilot CLI — the CLI equivalent of the kit's /planner command. Generate a grounded scenario plan and atomic, role-owned tasks, or answer "what am I assigned?". Use when the user makes an explicit planning request — "plan a rollout", "plan my ESS deployment", "create a plan", "scenario plan", "what am I assigned?" — or types /planner. Open-ended "set up ESS for the first time / where do I start" is NOT a direct trigger: it gets the first-run welcome. The planner is the one experience allowed before setup.
 ---
 
 # ESS Maker Kit — Planner (CLI)
 
 CLI-native entry point for the kit's `/planner`. In VS Code `/planner` is a prompt
 file; the Copilot CLI has no typed `/planner`, so this skill provides the same
-flow, invoked by intent ("plan an ESS rollout", "I want to set up ESS, where do I
-start?", "what am I assigned?"). The name matches the VS Code command so the two
+flow, invoked by an explicit planning request ("plan an ESS rollout", "create a
+plan", "what am I assigned?"). The name matches the VS Code command so the two
 surfaces stay consistent.
 
 This skill ships **inside** the kit; the kit root is the `ess-maker-skills` folder

@@ -25,6 +25,39 @@ true:
 Only continue to section 1.0 when no completed foundation state with a locked
 environment exists.
 
+## 0.95 — Reuse the ESS deployment's environment
+
+When there is no locked foundation environment, the plan may still record the
+environment the Power Platform admin set up for this deployment — every other
+maker should connect to **that** one. Check it (read-only; never writes the plan):
+
+```text
+python scripts/planner/cli.py setup-status
+```
+
+Parse the printed JSON. If `environmentPinned` is **false** (or there is no
+plan), continue to section 1.0. If `environmentPinned` is **true**, offer to
+reuse it:
+
+```json
+[
+  {
+    "header": "Use the ESS deployment's environment?",
+    "question": "An environment was already set up for this ESS deployment: **{displayName or environmentId}** ({environmentUrl}). Connect this kit to that same environment?",
+    "options": [
+      { "label": "Yes, use this environment", "description": "Connect to the environment the deployment already uses: {environmentUrl}" },
+      { "label": "No, choose a different one", "description": "Pick or enter another Power Platform environment" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- **Yes, use this environment** → set ENV_URL to `environment.environmentUrl`
+  (strip any trailing slash) and continue directly to section 1.2. Leave
+  FOUNDATION_REUSED false.
+- **No, choose a different one** → continue to section 1.0.
+
 ## 1.0 — Ask how to provide the environment
 
 Use the `vscode_askQuestions` tool:
