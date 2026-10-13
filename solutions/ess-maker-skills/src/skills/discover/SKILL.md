@@ -87,12 +87,10 @@ can watch it work.
 > **The write path is wired to the real WeveNova Inventory API and persisting is the
 > default** — a discovery pass exists to update the tenant inventory:
 >
-> - default — persist to WeveNova through the local MCP server, which resolves its own
->   token (`WEVENOVA_ACCESS_TOKEN`, else the saved `.local/wevenova_token` file, else a
->   local mint) and targets `https://substrate.office.com/weveb2`. Override the origin
->   with `--base-url` (or `WEVENOVA_BASE_URL`) for other rings or a dev tunnel.
-> - `--direct` — call the Inventory API from this process instead. Acquires its own
->   token and does **not** read the saved token file.
+> - default — persist to WeveNova through the ess-planner MCP server, which resolves its
+>   own token (`WEVENOVA_ACCESS_TOKEN`, else the planner's cached MSAL sign-in, shared
+>   with the planner skill) and targets `https://substrate.office.com/weveb2`. Override
+>   the origin with `--base-url` (or `WEVENOVA_BASE_URL`) for other rings or a dev tunnel.
 > - `--local-only` — explicit opt-out: crawl, validate, and update the local mirror
 >   without contacting WeveNova.
 >
@@ -159,34 +157,36 @@ python scripts/discover_inventory.py --tenant-id {TENANT_ID} \
   --base-url https://{wevenova-host} --json-out workspace/discover/results.json
 ```
 
-Writes go through the local MCP server (`src/mcp/wevenova/server.py`), which resolves
-the bearer token in this order:
+Writes go through the ess-planner MCP server
+(`src/mcp/agentconfig_planner/server.py`), which owns the inventory tools alongside the
+planner tools and resolves the bearer token in this order:
 
 1. `WEVENOVA_ACCESS_TOKEN`
-2. the saved token file — `.local/wevenova_token` or `.local/.wevenova_token`
-   (gitignored, both spellings accepted). Paste the same token used in Insomnia there;
-   a leading `Bearer ` is tolerated. It is re-read on every attempt, so refreshing an
-   expired token mid-crawl is picked up by the 401 retry.
-3. a local `New-WeveTeamsClientToken` mint, which needs Windows PowerShell 5.1 and a
-   TDS-paired machine (check with `Test-TdsMachinePair`).
+2. the planner's access token - the same cached MSAL sign-in the planner skill uses
+   (gitignored shared token cache under `agentconfig_core/.local/`). The Inventory API
+   accepts the planner's `weve/.default` scope, so a maker already signed in for the
+   planner gets a silent token and has nothing to paste; it is re-read on every attempt
+   so a refreshed token mid-crawl is picked up.
 
 On success `writePath` is reported as `mcp:{host}`.
 
-### `--direct`, and why it is not the default
+### Why the MCP server is the only live write path
 
-`--direct` calls the Inventory API from the crawler process. It acquires its own token
-from `WEVENOVA_ACCESS_TOKEN`, else an interactive MSAL sign-in against the kit's shared
-token cache — it does **not** read the saved token file.
+The crawler never calls the Inventory API itself. Every write goes through the
+ess-planner MCP server, which already holds the planner's signed-in token and is
+preauthorized by the service's `ManageAgentConfigurationFromAuthorizedApp` policy, so
+the Inventory API accepts its `weve/.default` scope. A token the crawler acquired on its
+own would be minted for a client the policy does not admit and rejected with a consent
+error (AADSTS65002) — so there is no direct path to misconfigure.
 
-**Expect `--direct` to degrade.** The service's
-`ManageAgentConfigurationFromAuthorizedApp` policy admits only the Sydney first-party
-app id, so a token acquired by this CLI is rejected with 403. The run still completes
-and the local mirror is still updated, but it exits `2` and reports the write as failed.
-That is precisely why the MCP path is the default. `--direct` conflicts with both
-`--via-mcp` and `--local-only`.
+When the MCP server cannot be reached — it fails to start, the dev tunnel is
+unreachable, or the API rejects the probe — the run **degrades to local-only**: it
+finishes the crawl, mirrors the results locally, reports `writePath` as `local-only`
+with a `writePathNote`, and exits `2`. Nothing is lost. Re-run the crawl once the MCP
+path is healthy and it reconciles the tenant inventory from the up-to-date local mirror.
 
-`--via-mcp` predates the flip and is now a no-op, still accepted so existing commands
-keep working.
+`--via-mcp` predates the current design and is now a no-op, still accepted so existing
+commands keep working.
 
 ### Exit codes
 
@@ -502,7 +502,7 @@ complete and the rest of your plan can build on what already exists in your tena
 - Server-side persistence is the default and is fully implemented, and it goes through
   the local MCP server, which supplies the token. When `writePath` is `local-only` for
   any reason, do not claim anything was saved to WeveNova.
-- If a run degrades, read `writePathNote` before guessing. The usual causes are a
-  missing or expired token file, the dev tunnel being unreachable, or a `--direct` run
-  hitting the 403 app-id policy. `--direct` degrading is expected, not a bug in the
-  crawl.
+- If a run degrades, read `writePathNote` before guessing. The usual causes are the MCP
+  server failing to start, a missing or expired token file, or the dev tunnel being
+  unreachable. A degraded run is not a bug in the crawl: the local mirror is current, and
+  re-running once the MCP path is healthy reconciles the tenant inventory.

@@ -7,7 +7,8 @@ The third implementation of the :class:`InventoryClient` Protocol, alongside
 ``HttpInventoryClient`` (direct HTTP) and ``InMemoryInventoryClient`` (no service).
 It speaks MCP over stdio to a server the caller spawns, so the crawler never handles
 a bearer token, a self-signed certificate, or an OData URL -- the server owns all
-three. See ``solutions/ess-maker-skills/src/mcp/wevenova/server.py``.
+three. See ``solutions/ess-maker-skills/src/mcp/agentconfig_planner/server.py`` (the
+ess-planner MCP, which owns the inventory write path).
 
 **Why a hand-rolled JSON-RPC client rather than the MCP SDK's:** the SDK client is
 async, and the crawler is synchronous top to bottom. Adapting it would mean either an
@@ -305,7 +306,13 @@ class _StdioJsonRpc:
 
 
 def default_server_argv(repo_root: str) -> list[str]:
-    """Command that launches the bundled WeveNova MCP server."""
+    """Command that launches the ess-planner MCP server.
+
+    The ess-planner server owns the inventory write path -- it exposes the four tools
+    this client drives (``probe`` / ``list_items`` / ``sync_inventory`` /
+    ``server_info``) alongside the planner tools, so a crawl persists through the same
+    MCP and identity the planner skill already uses.
+    """
     import os
 
     return [
@@ -316,7 +323,7 @@ def default_server_argv(repo_root: str) -> list[str]:
             "ess-maker-skills",
             "src",
             "mcp",
-            "wevenova",
+            "agentconfig_planner",
             "server.py",
         ),
     ]
@@ -370,9 +377,28 @@ class McpInventoryClient:
             text = blocks[0].get("text", "") if blocks else ""
             raise InventoryApiError(f"Tool '{name}' failed: {text or 'unknown error'}")
 
-        # Newer servers send the value directly; older ones only serialize it as text.
+        # Newer FastMCP servers echo the tool's return value as structured content.
+        # Our inventory tools return the {ok, data|error} envelope as a JSON *string*,
+        # and FastMCP -- having no object schema for a ``str`` return -- wraps it under
+        # a single "result" key: {"result": "<json string>"}. Peel that shell off and
+        # parse the envelope back out. Structured content that already carries "ok" is
+        # passed through untouched, and anything else falls through to the caller's
+        # "unrecognized payload" guard.
         if "structuredContent" in result:
-            return result["structuredContent"]
+            structured = result["structuredContent"]
+            if (
+                isinstance(structured, dict)
+                and "ok" not in structured
+                and "result" in structured
+            ):
+                inner = structured["result"]
+                if isinstance(inner, str):
+                    try:
+                        return json.loads(inner)
+                    except json.JSONDecodeError:
+                        return inner
+                return inner
+            return structured
 
         blocks = result.get("content") or []
         if not blocks:

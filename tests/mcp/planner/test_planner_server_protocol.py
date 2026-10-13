@@ -133,6 +133,15 @@ _TOOLS: dict[str, tuple[list[str], list[str]]] = {
         ["planId", "subjectId", "role"],
     ),
     "revoke_role_assignment": (["assignmentId", "etag"], ["assignmentId"]),
+    # WeveNova tenant-inventory write path, folded into this same server (one MCP, one
+    # identity) so a discovery crawl persists through it. Crawler-driven, so these
+    # follow the crawler's snake_case wire contract; the ``tenant_id`` argument is
+    # accepted but ignored in favour of the token's ``tid`` (see server.py), which is
+    # why it is not among _FORBIDDEN_IDENTITY_ARGS.
+    "server_info": ([], []),
+    "probe": (["tenant_id"], ["tenant_id"]),
+    "list_items": (["tenant_id", "kind", "environment_id"], ["tenant_id"]),
+    "sync_inventory": (["tenant_id", "items", "run_id"], ["tenant_id", "items"]),
 }
 
 # Category -> (readOnlyHint, destructiveHint, idempotentHint).
@@ -142,6 +151,9 @@ _HINTS = {
     "create_idempotent": (False, False, True),
     "update": (False, False, True),
     "delete": (False, True, True),
+    # syncInventory is a whole-inventory replace: destructive (omission retires) but
+    # safe to replay under its idempotency key.
+    "sync": (False, True, True),
 }
 _TOOL_CATEGORY = {
     "list_agent_configuration_projects": "read",
@@ -167,6 +179,10 @@ _TOOL_CATEGORY = {
     "get_role_assignment": "read",
     "attest_plan_role": "create_idempotent",
     "revoke_role_assignment": "delete",
+    "server_info": "read",
+    "probe": "read",
+    "list_items": "read",
+    "sync_inventory": "sync",
 }
 
 _FORBIDDEN_IDENTITY_ARGS = {

@@ -210,6 +210,29 @@ class TestResultShapes:
         client, _ = make_client({"list_items": _ok([{"id": "a"}])}, structured=True)
         assert client.list_items() == [{"id": "a"}]
 
+    def test_reads_fastmcp_result_wrapped_string(self, make_client):
+        """A str-returning tool reaches us as ``{"result": "<json string>"}``.
+
+        This is the real wire shape: ``server.py`` tools are typed ``-> str`` and
+        serialize the ``{ok, data|error}`` envelope with ``json.dumps``, so FastMCP has
+        no object schema and wraps the string under a single ``result`` key. The harness
+        had only ever simulated the already-unwrapped envelope, which is why a live crawl
+        degraded with "unrecognized payload" while the suite stayed green.
+        """
+        envelope = json.dumps(_ok([{"id": "a"}]))
+        client, _ = make_client(
+            {
+                "list_items": {
+                    "__raw__": {
+                        "isError": False,
+                        "structuredContent": {"result": envelope},
+                        "content": [{"type": "text", "text": envelope}],
+                    }
+                }
+            }
+        )
+        assert client.list_items() == [{"id": "a"}]
+
     def test_falls_back_to_the_text_block(self, make_client):
         client, _ = make_client({"list_items": _ok([{"id": "a"}])}, structured=False)
         assert client.list_items() == [{"id": "a"}]

@@ -23,7 +23,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import types
 
 import pytest
 
@@ -107,111 +106,6 @@ class TestResolveWriteMode:
         assert ENV_BASE_URL in str(exc.value)
 
 
-class _StubMsalApp:
-    def __init__(self, *, silent=None, interactive=None):
-        self._silent = silent
-        self._interactive = interactive
-        self.interactive_calls = 0
-
-    def get_accounts(self):
-        return ["account"] if self._silent is not None else []
-
-    def acquire_token_silent(self, scopes, account=None):
-        return self._silent
-
-    def acquire_token_interactive(self, scopes, prompt=None):
-        self.interactive_calls += 1
-        return self._interactive
-
-
-def _install_stub_msal(monkeypatch, app):
-    """Put a fake ``msal`` in sys.modules so the helper's lazy import finds it."""
-
-    class _Cache:
-        has_state_changed = False
-
-        def deserialize(self, _data):
-            return None
-
-        def serialize(self):
-            return "{}"
-
-    module = types.SimpleNamespace(
-        SerializableTokenCache=_Cache,
-        PublicClientApplication=lambda *a, **k: app,
-    )
-    monkeypatch.setitem(sys.modules, "msal", module)
-    return app
-
-
-class TestAcquireInventoryToken:
-    def test_env_var_wins_and_skips_interactive_auth(self, monkeypatch):
-        """CI and token-holders must never be forced through a browser prompt."""
-        monkeypatch.setenv(ENV_ACCESS_TOKEN, "env-token")
-        app = _install_stub_msal(monkeypatch, _StubMsalApp())
-        token, source = di._acquire_inventory_token("contoso")
-        assert token == "env-token"
-        assert source == ENV_ACCESS_TOKEN
-        assert app.interactive_calls == 0
-
-    def test_falls_back_to_a_silent_cached_token(self, monkeypatch):
-        app = _install_stub_msal(
-            monkeypatch, _StubMsalApp(silent={"access_token": "cached"})
-        )
-        token, source = di._acquire_inventory_token("contoso")
-        assert token == "cached"
-        assert source == "interactive sign-in"
-        # A cached token that satisfies the scope must not trigger a prompt.
-        assert app.interactive_calls == 0
-
-    def test_prompts_when_no_cached_token_satisfies_the_scope(self, monkeypatch):
-        app = _install_stub_msal(
-            monkeypatch, _StubMsalApp(interactive={"access_token": "fresh"})
-        )
-        token, _ = di._acquire_inventory_token("contoso")
-        assert token == "fresh"
-        assert app.interactive_calls == 1
-
-    def test_auth_failure_does_not_leak_the_error_description(self, monkeypatch):
-        """CWE-209: error_description can carry tenant ids and internal flow details."""
-        _install_stub_msal(
-            monkeypatch,
-            _StubMsalApp(
-                interactive={
-                    "error": "invalid_grant",
-                    "error_description": "tenant 72f9-secret rejected the request",
-                }
-            ),
-        )
-        with pytest.raises(RuntimeError) as exc:
-            di._acquire_inventory_token("contoso")
-        assert "invalid_grant" in str(exc.value)
-        assert "72f9-secret" not in str(exc.value)
-
-
-class _StubHttpClient:
-    """Stands in for HttpInventoryClient so no test touches the network."""
-
-    def __init__(self, probe_error=None):
-        self._probe_error = probe_error
-        self.closed = False
-
-    def probe(self):
-        if self._probe_error is not None:
-            raise self._probe_error
-
-    def close(self):
-        self.closed = True
-
-
-def _patch_http_client(monkeypatch, stub):
-    monkeypatch.setattr(
-        "tenant_inventory_discovery.inventory_client.HttpInventoryClient",
-        lambda *a, **k: stub,
-    )
-    return stub
-
-
 class TestBuildInventoryClient:
     def test_local_only_builds_the_in_memory_client(self):
         from tenant_inventory_discovery.in_memory_inventory import (
@@ -219,7 +113,7 @@ class TestBuildInventoryClient:
         )
 
         client, label, degraded = di._build_inventory_client(
-            None, True, "contoso", DiscoveryConfig()
+            True, "contoso", DiscoveryConfig()
         )
         assert isinstance(client, InMemoryInventoryClient)
         assert label == "local-only"
@@ -229,60 +123,8 @@ class TestBuildInventoryClient:
     def test_in_memory_client_inherits_the_configured_caps(self):
         """The opt-out must enforce the same caps, or it validates nothing useful."""
         config = DiscoveryConfig()
-        client, _, _ = di._build_inventory_client(None, True, "contoso", config)
+        client, _, _ = di._build_inventory_client(True, "contoso", config)
         assert client.caps is config.caps
-
-    def test_live_path_builds_the_http_client_after_a_successful_probe(
-        self, monkeypatch
-    ):
-        monkeypatch.setenv(ENV_ACCESS_TOKEN, "token")
-        stub = _patch_http_client(monkeypatch, _StubHttpClient())
-        config = DiscoveryConfig()
-        client, label, degraded = di._build_inventory_client(
-            _HOST, False, "contoso", config
-        )
-        assert client is stub
-        assert label == _HOST
-        assert degraded is None
-        assert config.inventory_base_url == _HOST
-
-    def test_probe_failure_degrades_instead_of_aborting(self, monkeypatch):
-        """A 403 must not kill the crawl -- the enumeration is still worth having."""
-        from tenant_inventory_discovery.in_memory_inventory import (
-            InMemoryInventoryClient,
-        )
-
-        monkeypatch.setenv(ENV_ACCESS_TOKEN, "token")
-        stub = _patch_http_client(
-            monkeypatch, _StubHttpClient(probe_error=RuntimeError("403 Forbidden"))
-        )
-        client, label, degraded = di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig()
-        )
-        assert isinstance(client, InMemoryInventoryClient)
-        assert label == "local-only"
-        assert degraded is not None
-        assert "403 Forbidden" in degraded
-        assert _HOST in degraded
-        # The rejected client owns an httpx connection pool; leaking it is a bug.
-        assert stub.closed is True
-
-    def test_missing_token_degrades_rather_than_exiting(self, monkeypatch):
-        """No token is a write-path failure, not a reason to throw away the crawl."""
-        from tenant_inventory_discovery.in_memory_inventory import (
-            InMemoryInventoryClient,
-        )
-
-        def _boom(_tenant):
-            raise RuntimeError("no token available")
-
-        monkeypatch.setattr(di, "_acquire_inventory_token", _boom)
-        client, label, degraded = di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig()
-        )
-        assert isinstance(client, InMemoryInventoryClient)
-        assert label == "local-only"
-        assert "no token available" in degraded
 
 
 class TestTlsHint:
@@ -311,15 +153,14 @@ class TestTlsHint:
         assert hint == ""
 
     def test_probe_failure_surfaces_the_hint(self, monkeypatch):
-        monkeypatch.setenv(ENV_ACCESS_TOKEN, "token")
-        _patch_http_client(
+        # The hint must reach the degrade reason through the MCP write path, which is
+        # where a dev-tunnel certificate failure surfaces now.
+        _patch_mcp_client(
             monkeypatch,
-            _StubHttpClient(
-                probe_error=RuntimeError("[SSL: CERTIFICATE_VERIFY_FAILED]")
-            ),
+            probe_error=RuntimeError("[SSL: CERTIFICATE_VERIFY_FAILED]"),
         )
         _, _, degraded = di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig()
+            False, "contoso", DiscoveryConfig(), False, _HOST
         )
         assert "--insecure-skip-tls-verify" in degraded
 
@@ -366,7 +207,7 @@ def _patch_mcp_client(monkeypatch, **kwargs):
 
 
 class TestBuildMcpClient:
-    """``--via-mcp`` hands the write path to the local server.
+    """The ess-planner MCP server is the only live write path.
 
     The server owns the token, the origin, and the certificate decision, so the only
     thing the bridge controls is the child's environment. Getting that wrong is not
@@ -379,13 +220,7 @@ class TestBuildMcpClient:
             monkeypatch, info={"baseUrl": "https://localhost:444/weveb2"}
         )
         client, label, degraded = di._build_inventory_client(
-            DEFAULT_INVENTORY_BASE_URL,
-            False,
-            "contoso",
-            DiscoveryConfig(),
-            False,
-            True,
-            None,
+            False, "contoso", DiscoveryConfig(), False, None
         )
         assert client is captured["instance"]
         # Reporting the server's own target, not the bridge's guess, is what makes a
@@ -396,7 +231,7 @@ class TestBuildMcpClient:
     def test_an_explicit_base_url_is_forwarded(self, monkeypatch):
         captured = _patch_mcp_client(monkeypatch)
         di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig(), False, True, _HOST
+            False, "contoso", DiscoveryConfig(), False, _HOST
         )
         assert captured["env"][ENV_BASE_URL] == _HOST
 
@@ -405,13 +240,7 @@ class TestBuildMcpClient:
         monkeypatch.setenv(ENV_BASE_URL, "https://leaked.example.test")
         captured = _patch_mcp_client(monkeypatch)
         di._build_inventory_client(
-            DEFAULT_INVENTORY_BASE_URL,
-            False,
-            "contoso",
-            DiscoveryConfig(),
-            False,
-            True,
-            None,
+            False, "contoso", DiscoveryConfig(), False, None
         )
         assert ENV_BASE_URL not in captured["env"]
 
@@ -424,14 +253,14 @@ class TestBuildMcpClient:
         captured = _patch_mcp_client(monkeypatch)
         monkeypatch.setenv("WEVENOVA_VERIFY_TLS", "true")
         di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig(), False, True, _HOST
+            False, "contoso", DiscoveryConfig(), False, _HOST
         )
         assert "WEVENOVA_VERIFY_TLS" not in captured["env"]
 
     def test_insecure_flag_forces_the_servers_verification_off(self, monkeypatch):
         captured = _patch_mcp_client(monkeypatch)
         di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig(), True, True, _HOST
+            False, "contoso", DiscoveryConfig(), True, _HOST
         )
         assert captured["env"]["WEVENOVA_VERIFY_TLS"] == "false"
 
@@ -442,7 +271,7 @@ class TestBuildMcpClient:
 
         _patch_mcp_client(monkeypatch, start_error=RuntimeError("no such file"))
         client, label, degraded = di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig(), False, True, _HOST
+            False, "contoso", DiscoveryConfig(), False, _HOST
         )
         assert isinstance(client, InMemoryInventoryClient)
         assert label == "local-only"
@@ -458,7 +287,7 @@ class TestBuildMcpClient:
             monkeypatch, probe_error=RuntimeError("connection refused")
         )
         client, label, degraded = di._build_inventory_client(
-            _HOST, False, "contoso", DiscoveryConfig(), False, True, _HOST
+            False, "contoso", DiscoveryConfig(), False, _HOST
         )
         assert isinstance(client, InMemoryInventoryClient)
         assert label == "local-only"
@@ -466,58 +295,19 @@ class TestBuildMcpClient:
         # A leaked subprocess would outlive the run and hold the tunnel open.
         assert captured["instance"].closed is True
 
-    def test_local_only_wins_over_via_mcp(self, monkeypatch):
-        """--local-only is checked first, so it can never be bypassed by --via-mcp."""
+    def test_local_only_wins(self, monkeypatch):
+        """--local-only is checked first, so the MCP server is never even started."""
         from tenant_inventory_discovery.in_memory_inventory import (
             InMemoryInventoryClient,
         )
 
         captured = _patch_mcp_client(monkeypatch)
         client, label, _ = di._build_inventory_client(
-            None, True, "contoso", DiscoveryConfig(), False, True, None
+            True, "contoso", DiscoveryConfig(), False, None
         )
         assert isinstance(client, InMemoryInventoryClient)
         assert label == "local-only"
         assert "instance" not in captured
-
-
-def _flags(*, via_mcp=False, direct=False, local_only=False):
-    return argparse.Namespace(
-        via_mcp=via_mcp, direct=direct, local_only=local_only
-    )
-
-
-class TestWritePathDefaultsToMcp:
-    """The MCP server is the default write path.
-
-    It is the only path that reads the saved ``.local/wevenova_token`` file. The direct
-    path acquires its own token, and the app id it can mint for is not admitted by the
-    service's authorization policy -- so when it was the default, an ordinary run
-    opened a browser, failed to sign in, degraded to the local mirror and exited 2,
-    even though a usable token was sitting on disk.
-    """
-
-    def test_a_bare_run_goes_through_mcp(self):
-        assert di._resolve_write_path(_flags()).via_mcp is True
-
-    def test_direct_opts_out(self):
-        assert di._resolve_write_path(_flags(direct=True)).via_mcp is False
-
-    def test_via_mcp_is_still_accepted(self):
-        """It predates the flip; existing commands and docs must keep working."""
-        assert di._resolve_write_path(_flags(via_mcp=True)).via_mcp is True
-
-    def test_local_only_does_not_conflict_with_the_new_default(self):
-        """--local-only is no longer contradicted by the implicit MCP default."""
-        assert di._resolve_write_path(_flags(local_only=True)).via_mcp is True
-
-    def test_via_mcp_with_direct_is_rejected(self):
-        with pytest.raises(SystemExit, match="--via-mcp conflicts with --direct"):
-            di._resolve_write_path(_flags(via_mcp=True, direct=True))
-
-    def test_direct_with_local_only_is_rejected(self):
-        with pytest.raises(SystemExit, match="--direct conflicts with --local-only"):
-            di._resolve_write_path(_flags(direct=True, local_only=True))
 
 
 class TestResolveEntraAppId:

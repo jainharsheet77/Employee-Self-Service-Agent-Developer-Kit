@@ -778,6 +778,40 @@ class Plan:
         task["checklist"] = list(items)
         return task
 
+    # ---- pending-sync markers (local completion not yet on the service) -- #
+    # The CLI is network-free by design (src/skills/planner/sync.md): a capture
+    # ``--complete`` flips a task to Completed in this local cache, but the push
+    # to the shared planner is a separate step the agent performs via the
+    # ``complete_project_plan_task`` tool. ``pendingSync`` closes that gap: it
+    # marks a task Completed-locally-but-not-yet-confirmed-on-the-service so the
+    # completion can be pushed in the same flow, surfaced if the push fails, and
+    # NOT silently reverted by a later pull (see ``sync.preserve_local_pending``).
+    # It is an internal durable flag, not a task state — the task reads
+    # ``Completed`` to the sponsor throughout; the flag only lingers (and the
+    # agent auto-retries the push) until the service confirms.
+
+    def mark_task_pending_sync(self, task_id: str) -> dict[str, Any]:
+        """Flag a task whose completion is saved locally but not yet confirmed on
+        the shared planner. Cleared on a confirmed push (``import-remote-plan``
+        re-hydrate, or ``mark-synced``); preserved across a pull so an unpushed
+        local completion is never clobbered by the service's stale state."""
+        task = self._require_task(task_id)
+        task["pendingSync"] = True
+        return task
+
+    def clear_task_pending_sync(self, task_id: str) -> dict[str, Any]:
+        """Clear the pending-sync flag once the completion is confirmed on the
+        service (the key is dropped rather than set false, keeping plan.json clean)."""
+        task = self._require_task(task_id)
+        task.pop("pendingSync", None)
+        return task
+
+    def pending_sync_tasks(self) -> list[dict[str, Any]]:
+        """Tasks completed locally but not yet confirmed on the shared planner —
+        the push backlog the agent reconciles (newest-producing order is not
+        guaranteed; callers push each independently)."""
+        return [t for t in self.tasks if t.get("pendingSync")]
+
     def update_task(
         self,
         task_id: str,

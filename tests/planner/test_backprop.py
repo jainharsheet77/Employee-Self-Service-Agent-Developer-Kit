@@ -297,6 +297,117 @@ def test_capture_discover_dry_run_saves_nothing(tmp_path, capsys):
     assert Plan.load(plan_path).output("tenantInventory") is None  # nothing pinned
 
 
+def _plan_with_completed_discover(tmp_path, capsys):
+    """init + a discover task + capture-discover --complete, leaving T2 Completed
+    and flagged pendingSync (not yet on the shared plan). Returns the plan path."""
+    plan_path = str(tmp_path / "plan.json")
+    results = tmp_path / "results.json"
+    _write_results(results)
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Discover the tenant inventory",
+         "--description", "Run /discover", "--role", "power-platform-admin", "--produces", "tenantInventory")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-discover", "--results", str(results), "--complete")
+    assert rc == 0
+    return plan_path
+
+
+def test_capture_discover_complete_flags_pending_and_prompts_sync(tmp_path, capsys):
+    plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    err = capsys.readouterr().err
+    # Softened, sync-progress language — not a hard "push required".
+    assert "Syncing progress to the shared plan" in err
+    assert "pendingSync" in err
+    plan = Plan.load(plan_path)
+    assert plan.task("T2")["state"] == "Completed"
+    assert plan.task("T2")["pendingSync"] is True
+
+
+def test_cli_pending_sync_lists_backlog(tmp_path, capsys):
+    plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    capsys.readouterr()
+    assert _run("--plan", plan_path, "pending-sync") == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert [t["localId"] for t in payload["tasks"]] == ["T2"]
+    assert payload["tasks"][0]["outputs"][0]["key"] == "tenantInventory"
+
+
+def test_cli_mark_synced_clears_flag(tmp_path, capsys):
+    plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    capsys.readouterr()
+    assert _run("--plan", plan_path, "mark-synced", "--task", "T2") == 0
+    assert "pendingSync" not in Plan.load(plan_path).task("T2")
+    # Backlog is now empty.
+    capsys.readouterr()
+    _run("--plan", plan_path, "pending-sync")
+    assert json.loads(capsys.readouterr().out)["tasks"] == []
+
+
+def test_cli_mark_synced_all_clears_everything(tmp_path, capsys):
+    plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    capsys.readouterr()
+    assert _run("--plan", plan_path, "mark-synced", "--all") == 0
+    assert Plan.load(plan_path).pending_sync_tasks() == []
+
+
+def test_cli_import_remote_plan_preserves_unpushed_completion(tmp_path, capsys):
+    plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    capsys.readouterr()
+    # The service still shows the discover task NotStarted (the completion never
+    # reached it). A plain pull would revert it; import must preserve it.
+    remote = {
+        "plan": {
+            "planId": "plan-1", "projectId": "proj-1",
+            "configuringAgentName": "EmployeeSelfServiceHRDA",
+            "status": "Active", "outputs": [],
+        },
+        "tasks": {"value": [
+            {"taskId": "T2", "title": "Discover the tenant inventory",
+             "state": "NotStarted", "produces": ["tenantInventory"],
+             "assignedTo": {"type": "Role", "id": "EntraPowerPlatformAdministrator"}},
+        ]},
+    }
+    input_file = tmp_path / "remote.json"
+    input_file.write_text(json.dumps(remote), encoding="utf-8")
+
+    assert _run("--plan", plan_path, "import-remote-plan", "--input", str(input_file)) == 0
+    err = capsys.readouterr().err
+    assert "Preserved unpushed local completion(s): T2" in err
+    plan = Plan.load(plan_path)
+    assert plan.task("T2")["state"] == "Completed"
+    assert plan.task("T2")["pendingSync"] is True
+    # The produced inventory artifact is carried forward so the Completed task resolves.
+    assert plan.output("tenantInventory") is not None
+
+
+def test_cli_import_remote_plan_clears_pending_when_service_confirms(tmp_path, capsys):
+    plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    capsys.readouterr()
+    # The service now agrees the task is Completed (the push landed) -> flag clears.
+    remote = {
+        "plan": {
+            "planId": "plan-1", "projectId": "proj-1",
+            "configuringAgentName": "EmployeeSelfServiceHRDA",
+            "status": "Active",
+            "outputs": [{"key": "tenantInventory", "kind": "Custom",
+                         "producedByTaskId": "T2", "state": "Active",
+                         "attributes": [{"key": "resourceCount", "value": "3"}]}],
+        },
+        "tasks": {"value": [
+            {"taskId": "T2", "title": "Discover the tenant inventory",
+             "state": "Completed", "produces": ["tenantInventory"],
+             "assignedTo": {"type": "Role", "id": "EntraPowerPlatformAdministrator"}},
+        ]},
+    }
+    input_file = tmp_path / "remote.json"
+    input_file.write_text(json.dumps(remote), encoding="utf-8")
+
+    assert _run("--plan", plan_path, "import-remote-plan", "--input", str(input_file)) == 0
+    plan = Plan.load(plan_path)
+    assert plan.task("T2")["state"] == "Completed"
+    assert "pendingSync" not in plan.task("T2")
+
+
 def test_cli_pin_output_commits_artifact(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")

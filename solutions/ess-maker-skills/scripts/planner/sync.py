@@ -32,6 +32,7 @@ Vocabulary bridges handled here:
 
 from __future__ import annotations
 
+import copy
 import json
 from typing import Any
 
@@ -207,6 +208,29 @@ def to_remote_task_body(task: dict[str, Any]) -> dict[str, Any]:
     if consumes:
         body["consumes"] = list(consumes)
     return body
+
+
+def to_remote_output(artifact: dict[str, Any]) -> dict[str, Any]:
+    """Map one local output artifact onto the service completion shape consumed by
+    ``complete_project_plan_task(outputs=[...])``.
+
+    The local model stores attributes as a flat ``{key: value}`` dict; the service
+    (and the planner MCP's ``_normalize_completion_outputs``) wants a typed
+    ``[{key, value}]`` list. Only the fields the tool accepts are emitted — ``key``,
+    ``kind``, ``attributes`` and an optional ``inventoryRef`` — so the payload this
+    produces can be handed straight to the tool. Local-only provenance (``source``,
+    ``producedByTaskId``, ``state``) is dropped; the service stamps its own.
+    """
+    attributes = artifact.get("attributes") or {}
+    wire: dict[str, Any] = {
+        "key": artifact.get("key", ""),
+        "kind": artifact.get("kind", "Custom"),
+        "attributes": [{"key": k, "value": v} for k, v in attributes.items()],
+    }
+    inventory_ref = artifact.get("inventoryRef")
+    if inventory_ref:
+        wire["inventoryRef"] = inventory_ref
+    return wire
 
 
 def to_remote_plan_body(
@@ -561,6 +585,110 @@ def hydrate_from_remote(
         "outputs": outputs,
         "etag": _scalar(plan_entity, "etag", "ETag", "@odata.etag", default=""),
         "syncedAt": now_iso(),
+    }
+
+
+def preserve_local_pending(
+    hydrated: dict[str, Any],
+    local: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Carry an unpushed local completion across a pull so the service's stale
+    state can't silently revert it.
+
+    ``import-remote-plan`` rebuilds the local cache wholesale from the service (the
+    service is the source of truth). But a task completed locally and flagged
+    ``pendingSync`` has NOT reached the service yet, so the freshly hydrated copy
+    would show it ``NotStarted`` again — clobbering the completion and its outputs.
+    For each such local task this re-applies ``Completed`` + ``pendingSync`` onto the
+    matching hydrated task (matched by ``remoteId`` then ``id``) and re-pins the
+    outputs it produced when the pull didn't carry them, so the completion — and the
+    invariant that a Completed task's produces resolve — survives until a push lands.
+    Once the service confirms the task ``Completed``, the pull carries it with no
+    ``pendingSync`` and nothing is re-applied: the flag clears naturally.
+
+    Returns ``hydrated`` (mutated in place); a missing/empty ``local`` is a no-op.
+    """
+    if not isinstance(local, dict):
+        return hydrated
+    local_tasks = [
+        t for t in local.get("tasks", [])
+        if isinstance(t, dict) and t.get("pendingSync")
+    ]
+    if not local_tasks:
+        return hydrated
+
+    hydrated_tasks = hydrated.setdefault("tasks", [])
+    by_remote = {t.get("remoteId"): t for t in hydrated_tasks if t.get("remoteId")}
+    by_id = {t.get("id"): t for t in hydrated_tasks if t.get("id")}
+    hydrated_outputs = hydrated.setdefault("outputs", [])
+    local_outputs = local.get("outputs", [])
+    if not isinstance(local_outputs, list):
+        local_outputs = []
+
+    for lt in local_tasks:
+        match = by_remote.get(lt.get("remoteId")) or by_id.get(lt.get("id"))
+        if match is None:
+            # The completion was never pushed, so the service doesn't know this
+            # task at all — keep the local copy wholesale rather than drop it.
+            match = copy.deepcopy(lt)
+            hydrated_tasks.append(match)
+        elif match.get("state") != "Completed":
+            # Service still shows it open -> the push hasn't landed; re-apply.
+            match["state"] = "Completed"
+            match["pendingSync"] = True
+        else:
+            # Service confirms Completed -> the push landed; let the flag clear.
+            match.pop("pendingSync", None)
+
+        if not match.get("pendingSync"):
+            continue
+        # Re-pin the outputs this unpushed completion produced that the pull didn't
+        # carry, so the Completed task's declared produces still resolve locally.
+        target_id = match.get("id")
+        active_keys = {
+            a.get("key") for a in hydrated_outputs if a.get("state") == "Active"
+        }
+        for art in local_outputs:
+            if (
+                art.get("producedByTaskId") == lt.get("id")
+                and art.get("state") == "Active"
+                and art.get("key") not in active_keys
+            ):
+                carried = copy.deepcopy(art)
+                carried["producedByTaskId"] = target_id
+                hydrated_outputs.append(carried)
+                active_keys.add(carried.get("key"))
+    return hydrated
+
+
+def pending_sync_payload(plan: Plan) -> dict[str, Any]:
+    """The exact arguments the agent needs to push each pending-sync completion to
+    the shared planner via ``complete_project_plan_task``.
+
+    Read-only. Returns ``{projectId, planId, tasks: [...]}`` where each task carries
+    the service ``taskId`` (its ``remoteId``), the ETag to guard the PATCH, and the
+    produced ``outputs`` already mapped to the tool's completion shape
+    (:func:`to_remote_output`). An empty ``tasks`` list means nothing is pending.
+    """
+    tasks: list[dict[str, Any]] = []
+    for task in plan.pending_sync_tasks():
+        outputs = [
+            to_remote_output(art)
+            for art in plan.outputs_of_task(task.get("id", ""))
+            if art.get("state") == "Active"
+        ]
+        tasks.append({
+            "taskId": task.get("remoteId") or task.get("id", ""),
+            "localId": task.get("id", ""),
+            "title": task.get("title", ""),
+            "etag": task.get("etag", ""),
+            "state": task.get("state", ""),
+            "outputs": outputs,
+        })
+    return {
+        "projectId": plan.data.get("projectId", ""),
+        "planId": plan.data.get("planId", ""),
+        "tasks": tasks,
     }
 
 

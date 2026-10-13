@@ -428,6 +428,45 @@ def test_complete_task_rejects_duplicate_output_keys(monkeypatch) -> None:
         )
 
 
+def test_complete_task_rejects_oversized_outputs(monkeypatch) -> None:
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    bulky = [
+        {
+            "key": "tenantInventory",
+            "kind": "Custom",
+            "attributes": [{"key": "dump", "value": "x" * 30_000}],
+        }
+    ]
+    with pytest.raises(ValueError, match="too large"):
+        _run(
+            client,
+            lambda: client.complete_project_plan_task("p", "pl", "t", bulky, "etag"),
+        )
+
+
+def test_complete_task_accepts_compact_outputs(monkeypatch) -> None:
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    compact = [
+        {
+            "key": "tenantInventory",
+            "kind": "Custom",
+            "attributes": [
+                {"key": "resourceCount", "value": "4"},
+                {"key": "resources", "value": "connection:2 environment:1"},
+            ],
+            "inventoryRef": "Inventory:run-123",
+        }
+    ]
+    _run(
+        client,
+        lambda: client.complete_project_plan_task("p", "pl", "t", compact, "etag"),
+    )
+    body = json.loads(requests[0].content)
+    assert body["outputs"][0]["inventoryRef"] == "Inventory:run-123"
+
+
 # ---------------------------------------------------------------------------
 # Role attestation (tenant-sharded)
 # ---------------------------------------------------------------------------

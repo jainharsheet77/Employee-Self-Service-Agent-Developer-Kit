@@ -20,6 +20,7 @@ from planner.plan_model import (
     STREAM_GROUP,
     Plan,
     new_task,
+    plan_artifact,
     principal_person,
     principal_pool,
 )
@@ -642,3 +643,110 @@ def test_cli_stamp_remote(tmp_path):
     assert plan.data["projectId"] == "proj-1"
     assert plan.data["planId"] == "plan-1"
     assert plan.data["etag"] == "W/1"
+
+
+# --------------------------------------------------------------------------- #
+# Pending-sync — couple a local completion with the push to the shared plan.
+# --------------------------------------------------------------------------- #
+
+def _local_pending(remote_id="rt-1", key="workdayConnection"):
+    """A local plan whose task ``remote_id`` is Completed + pendingSync, with its
+    produced output pinned — the shape a capture ``--complete`` leaves before the
+    push to the shared plan lands."""
+    plan = Plan.new()
+    plan.data["projectId"] = "proj-1"
+    plan.data["planId"] = "plan-1"
+    task = new_task(
+        remote_id, "Configure Workday",
+        produces=[key], assigned_to=principal_pool("WorkdayAdmin"),
+    )
+    task["remoteId"] = remote_id
+    task["etag"] = "W/task-1"
+    plan.add_task(task)
+    plan.add_output(plan_artifact(key, "Connection", {"connectionId": "c1"}, produced_by_task_id=remote_id))
+    plan.set_task_state(remote_id, "Completed")
+    plan.mark_task_pending_sync(remote_id)
+    return plan
+
+
+def test_to_remote_output_maps_flat_attrs_to_typed_list():
+    art = plan_artifact(
+        "workdayConnection", "Connection", {"connectionId": "c1", "name": "wd"},
+        produced_by_task_id="rt-1", inventory_ref="Connection:c1",
+    )
+    wire = sync.to_remote_output(art)
+    assert wire["key"] == "workdayConnection"
+    assert wire["kind"] == "Connection"
+    assert wire["attributes"] == [
+        {"key": "connectionId", "value": "c1"},
+        {"key": "name", "value": "wd"},
+    ]
+    assert wire["inventoryRef"] == "Connection:c1"
+    # Local-only provenance is dropped so the payload is tool-ready.
+    assert "producedByTaskId" not in wire and "source" not in wire
+
+
+def test_preserve_carries_unpushed_completion_across_pull():
+    # Service still shows rt-1 InProgress (the push never landed); the pull would
+    # revert the local Completed without preserve.
+    hydrated = sync.hydrate_from_remote(_remote_plan(), _remote_tasks())
+    local = _local_pending().data
+
+    merged = sync.preserve_local_pending(hydrated, local)
+    rt1 = {t["id"]: t for t in merged["tasks"]}["rt-1"]
+    assert rt1["state"] == "Completed"
+    assert rt1["pendingSync"] is True
+    # The produced output the pull didn't carry is re-pinned so the Completed
+    # task's declared produces still resolve locally.
+    carried = [a for a in merged["outputs"] if a["key"] == "workdayConnection"]
+    assert carried and carried[0]["state"] == "Active"
+    assert carried[0]["producedByTaskId"] == "rt-1"
+
+
+def test_preserve_clears_flag_when_service_confirms_completed():
+    tasks = _remote_tasks()
+    tasks["value"][0]["state"] = "Completed"  # service now agrees it's done
+    hydrated = sync.hydrate_from_remote(_remote_plan(), tasks)
+    local = _local_pending().data
+
+    merged = sync.preserve_local_pending(hydrated, local)
+    rt1 = {t["id"]: t for t in merged["tasks"]}["rt-1"]
+    assert rt1["state"] == "Completed"
+    assert "pendingSync" not in rt1  # push confirmed -> flag clears naturally
+
+
+def test_preserve_appends_local_task_absent_from_service():
+    hydrated = sync.hydrate_from_remote(_remote_plan(), _remote_tasks())
+    local = _local_pending(remote_id="rt-99").data  # never pushed; unknown to service
+
+    merged = sync.preserve_local_pending(hydrated, local)
+    by_id = {t["id"]: t for t in merged["tasks"]}
+    assert "rt-99" in by_id
+    assert by_id["rt-99"]["state"] == "Completed"
+    assert by_id["rt-99"]["pendingSync"] is True
+
+
+def test_preserve_is_noop_without_pending():
+    hydrated = sync.hydrate_from_remote(_remote_plan(), _remote_tasks())
+    before = json.dumps(hydrated, sort_keys=True)
+    assert sync.preserve_local_pending(hydrated, None) == hydrated
+    plain = _plan().data  # no pendingSync anywhere
+    assert json.dumps(sync.preserve_local_pending(hydrated, plain), sort_keys=True) == before
+
+
+def test_pending_sync_payload_is_tool_ready():
+    plan = _local_pending()
+    payload = sync.pending_sync_payload(plan)
+    assert payload["projectId"] == "proj-1"
+    assert payload["planId"] == "plan-1"
+    assert len(payload["tasks"]) == 1
+    entry = payload["tasks"][0]
+    assert entry["taskId"] == "rt-1"  # the service id, not the local id
+    assert entry["etag"] == "W/task-1"
+    assert entry["outputs"][0]["key"] == "workdayConnection"
+    assert entry["outputs"][0]["attributes"] == [{"key": "connectionId", "value": "c1"}]
+
+
+def test_pending_sync_payload_empty_when_nothing_pending():
+    assert sync.pending_sync_payload(_plan())["tasks"] == []
+

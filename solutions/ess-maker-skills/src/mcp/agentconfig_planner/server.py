@@ -19,6 +19,7 @@ from typing import Any, Optional
 from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
+from inventory_surface import InventorySurface
 from planner_client import PlannerClient
 from roles_surface import ATTESTABLE_ROLES
 
@@ -58,6 +59,16 @@ _CREATE_IDEMPOTENT_ANNOTATIONS = ToolAnnotations(
     idempotentHint=True,
     openWorldHint=False,
 )
+# syncInventory is whole-inventory replace: the payload IS the desired end state, so
+# anything Active it omits is retired — destructive. It is still safe to replay (the
+# idempotency key makes a resend converge rather than re-run), so it is marked
+# idempotent.
+_SYNC_INVENTORY_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=True,
+    idempotentHint=True,
+    openWorldHint=False,
+)
 
 
 mcp = FastMCP(
@@ -78,6 +89,7 @@ mcp = FastMCP(
 )
 
 _client: Optional[PlannerClient] = None
+_inventory: Optional[InventorySurface] = None
 
 
 def get_client() -> PlannerClient:
@@ -85,6 +97,24 @@ def get_client() -> PlannerClient:
     if _client is None:
         _client = PlannerClient()
     return _client
+
+
+def get_inventory_surface() -> InventorySurface:
+    """Lazily build the inventory write path, reusing the planner's resolved token.
+
+    The WeveNova Inventory API accepts the same ``weve/.default`` scope the planner
+    core already holds, so a crawl persists through this one MCP under the signed-in
+    principal without a second sign-in. The token is read per request so a refresh is
+    picked up; ``WEVENOVA_ACCESS_TOKEN`` still overrides it for CI.
+    """
+    global _inventory
+    if _inventory is None:
+        client = get_client()
+        _inventory = InventorySurface(
+            token_provider=lambda: get_client()._token,
+            tenant_id=client.tenant_id,
+        )
+    return _inventory
 
 
 def _format(data: Any) -> str:
@@ -469,6 +499,68 @@ async def revoke_role_assignment(
     """Revoke a plan role assignment by opaque assignment ID (soft-revoke to
     Status=Revoked)."""
     return _format(await get_client().revoke_role_assignment(assignmentId, etag))
+
+
+# ----------------------------------------------------------------------
+# WeveNova tenant-inventory tools. The discovery crawler
+# (tenant_inventory_discovery.mcp_inventory.McpInventoryClient) drives these four
+# over stdio to persist a crawl through this same ess-planner MCP, so the inventory
+# write path shares the planner's identity and process instead of a separate server.
+# Unlike the planner tools they return a {ok, data|error} envelope (not raw _format
+# JSON): the crawler unwraps it and rebuilds the inventory error taxonomy from
+# error.type. These are sync defs on purpose — the shared HttpInventoryClient is
+# blocking, and FastMCP runs sync tools in a worker thread so they never stall the
+# event loop. Tenant and token come from the access token; the tenant_id argument is
+# part of the crawler's wire contract but the token's tid is authoritative.
+# ----------------------------------------------------------------------
+
+
+@mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
+def server_info() -> str:
+    """Report the inventory endpoint and token strategy the server is using (never the
+    token itself). The crawler reads ``baseUrl`` to label the write path. Returns a
+    ``{ok, data|error}`` envelope."""
+    return _format(get_inventory_surface().server_info())
+
+
+@mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
+def probe(tenant_id: str) -> str:
+    """Pre-flight the WeveNova Inventory API: one ``$top=1`` GET to confirm the
+    endpoint is reachable and the token is accepted, so an unusable write path is
+    reported before a long crawl rather than at sync time. Returns a
+    ``{ok, data|error}`` envelope."""
+    return _format(get_inventory_surface().probe())
+
+
+@mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
+def list_items(
+    tenant_id: str,
+    kind: Optional[str] = None,
+    environment_id: Optional[str] = None,
+) -> str:
+    """List the tenant's non-retired inventory rows, optionally narrowed to one
+    ``kind`` discriminator (e.g. Environment, Connection) and/or ``environment_id``.
+    Returns a ``{ok, data|error}`` envelope whose ``data`` is the row list."""
+    return _format(
+        get_inventory_surface().list_items(kind=kind, environment_id=environment_id)
+    )
+
+
+@mcp.tool(annotations=_SYNC_INVENTORY_ANNOTATIONS)
+def sync_inventory(
+    tenant_id: str,
+    items: list[dict[str, Any]],
+    run_id: str = "",
+) -> str:
+    """Persist the tenant's whole inventory to WeveNova in one ``syncInventory`` call.
+    The submitted ``items`` ARE the desired end state, so anything Active the payload
+    omits is retired — never submit a partial crawl. Each item is domain-shaped
+    ({kind, natural_key, attributes, environment_id, display_name, description}); the
+    shared client encodes the wire body, so there is only one encoder. ``run_id``
+    scopes the idempotency key so a timed-out resend replays rather than re-runs.
+    Returns a ``{ok, data|error}`` envelope with submitted/upserted/retired counts,
+    retiredItemIds, and any failedItems."""
+    return _format(get_inventory_surface().sync_inventory(items=items, run_id=run_id))
 
 
 if __name__ == "__main__":

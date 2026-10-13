@@ -206,6 +206,33 @@ def test_require_task_missing():
         plan.set_task_state("nope", "Completed")
 
 
+def test_pending_sync_markers_round_trip():
+    plan = _plan_with_tasks()
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.set_task_state("T1", "Completed")
+    # Not pending until explicitly flagged — set_task_state stays pure.
+    assert plan.pending_sync_tasks() == []
+
+    plan.mark_task_pending_sync("T1")
+    assert plan.task("T1")["pendingSync"] is True
+    assert [t["id"] for t in plan.pending_sync_tasks()] == ["T1"]
+
+    # Clearing drops the key entirely (keeps plan.json clean) and empties the backlog.
+    plan.clear_task_pending_sync("T1")
+    assert "pendingSync" not in plan.task("T1")
+    assert plan.pending_sync_tasks() == []
+    # A pending flag does not make the plan invalid.
+    assert plan.validate() == []
+
+
+def test_pending_sync_markers_reject_unknown_task():
+    plan = _plan_with_tasks()
+    with pytest.raises(KeyError):
+        plan.mark_task_pending_sync("nope")
+    with pytest.raises(KeyError):
+        plan.clear_task_pending_sync("nope")
+
+
 def test_update_task_changes_content_only():
     plan = _plan_with_tasks()
     plan.update_task(

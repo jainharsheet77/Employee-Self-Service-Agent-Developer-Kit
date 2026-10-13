@@ -113,6 +113,17 @@ Run this the moment `/planner` starts, before deciding whether to interview:
 is authoritative). It prints any validation notes as warnings — treat them as
 diagnostics, never as a reason to refuse the plan.
 
+**A pull never reverts an unpushed local completion.** If a task was completed
+locally but its push to the service hasn't landed yet (flagged `pendingSync` —
+see `src/skills/planner/capture.md`), `import-remote-plan` **preserves** it
+instead of overwriting it with the service's stale `NotStarted`, and prints
+`Preserved unpushed local completion(s): …`. So on entry, after the hydrate, run
+`python scripts/planner/cli.py pending-sync`; if it lists any task, **sync each
+now** via `complete_project_plan_task` (the capture file's *Sync each local
+complete* flow) before moving on — then re-hydrate so the server's confirmation
+clears the flag. This is what makes a completion that failed to push last time
+reach the shared plan on the next successful entry.
+
 ## Push — publish a newly authored plan as one object
 
 **Publishing is automatic and mandatory, not optional.** The moment the plan is
@@ -204,6 +215,14 @@ local cache), then re-hydrate so the cache reflects the server's response:
 
 - **Change a task's state:** `set_project_plan_task_state`.
 - **Record what a task produced:** `complete_project_plan_task` (Phase 6 capture).
+  This is **coupled to the local complete, not a deferred step**: the moment a
+  `capture-setup` / `capture-discover` / `pin-output --complete` flags a task
+  `pendingSync`, push it in the same turn — `pending-sync` prints the exact
+  `projectId` / `planId` / `taskId` / `outputs` / `etag`; call the tool, then
+  re-hydrate to clear the flag. If the push can't reach the service, the
+  completion stays `pendingSync` locally and syncs on the next entry (the Pull
+  step above preserves and re-attempts it). Full flow:
+  `src/skills/planner/capture.md` → *Sync each local complete to the shared plan*.
 - **Edit task content** (title/description/produces/consumes): `update_project_plan_task`.
 - **Add a task later:** `create_project_plan_task` (or
   `create_role_assigned_project_plan_task` for a role-owned task).
