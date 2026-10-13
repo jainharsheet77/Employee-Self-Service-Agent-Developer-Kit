@@ -113,6 +113,29 @@ _EXPECTED_ANNOTATIONS: dict[str, str] = {
     "revoke_role_assignment": "_DELETE_ANNOTATIONS",
 }
 
+# The WeveNova tenant-inventory write path is folded into this same server -- one MCP,
+# one identity -- so a discovery crawl persists through it instead of a separate
+# process. These four are driven by the external crawler
+# (tenant_inventory_discovery.mcp_inventory.McpInventoryClient), so unlike the planner
+# tools they follow the crawler's snake_case wire contract and each carries a
+# ``tenant_id`` argument. That argument is part of the wire contract but is ignored in
+# favour of the token's ``tid`` (see server.py), which is why it is absent from
+# _FORBIDDEN_IDENTITY_ARGS: the planner tools must never take tenant identity, while the
+# inventory tools accept the crawler's and then disregard it.
+_EXPECTED_INVENTORY_TOOLS: dict[str, list[str]] = {
+    "server_info": [],
+    "probe": ["tenant_id"],
+    "list_items": ["tenant_id", "kind", "environment_id"],
+    "sync_inventory": ["tenant_id", "items", "run_id"],
+}
+
+_EXPECTED_INVENTORY_ANNOTATIONS: dict[str, str] = {
+    "server_info": "_READ_ONLY_ANNOTATIONS",
+    "probe": "_READ_ONLY_ANNOTATIONS",
+    "list_items": "_READ_ONLY_ANNOTATIONS",
+    "sync_inventory": "_SYNC_INVENTORY_ANNOTATIONS",
+}
+
 
 def _tool_nodes() -> dict[str, ast.AsyncFunctionDef]:
     module = ast.parse(SERVER_PATH.read_text(encoding="utf-8"))
@@ -136,7 +159,7 @@ def test_server_exposes_exactly_the_planner_tool_contract() -> None:
         name: [argument.arg for argument in node.args.args]
         for name, node in tools.items()
     }
-    assert actual == _EXPECTED_TOOLS
+    assert actual == {**_EXPECTED_TOOLS, **_EXPECTED_INVENTORY_TOOLS}
 
 
 def test_each_tool_classifies_its_effect_with_annotations() -> None:
@@ -155,7 +178,7 @@ def test_each_tool_classifies_its_effect_with_annotations() -> None:
         assert keyword is not None, f"{name} is missing tool annotations"
         assert isinstance(keyword.value, ast.Name)
         annotations[name] = keyword.value.id
-    assert annotations == _EXPECTED_ANNOTATIONS
+    assert annotations == {**_EXPECTED_ANNOTATIONS, **_EXPECTED_INVENTORY_ANNOTATIONS}
 
 
 def test_every_tool_has_a_description() -> None:
