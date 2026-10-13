@@ -74,7 +74,13 @@ progress to the shared plan"* note with the exact next step. Act on it
    task (empty `tasks` → nothing to sync).
 2. For each, call **`complete_project_plan_task`** (`projectId`, `planId`,
    `taskId`, `outputs`, `etag`) — the Ongoing-edits tool in
-   `src/skills/planner/sync.md`.
+   `src/skills/planner/sync.md`. The `outputs` `pending-sync` hands you are
+   already compact — a key, a kind, a few value-add attributes (id, name, counts)
+   and an `inventoryRef` pointer. **Pass them through as-is; never swap in bulk
+   detail** (e.g. a full `/discover` crawl or an inventory dump). The service
+   stores a task's outputs in a small fixed budget and rejects an oversized
+   completion outright — the detail belongs in its durable record, which the
+   `inventoryRef` points at.
 3. **On success**, re-hydrate (`get_project_plan` + `list_project_plan_tasks` →
    `import-remote-plan`) so the cache carries the server's confirmation — that
    clears `pendingSync` on its own. (Quick alternative when you aren't

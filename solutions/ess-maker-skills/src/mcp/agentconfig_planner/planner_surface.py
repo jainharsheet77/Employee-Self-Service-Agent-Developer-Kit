@@ -14,6 +14,7 @@ untransformed (``transform_payload=False``).
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from typing import Any, Awaitable, Callable, Optional
@@ -50,6 +51,18 @@ _TASK_STATES = ("NotStarted", "InProgress", "Completed", "Cancelled")
 # (state, outputs) go through set_project_plan_task_state / complete.
 _TASK_UPDATE_FIELDS = ("title", "description", "assignedToId", "produces", "consumes")
 _OUTPUT_KINDS = ("Custom", "Environment", "Connection", "KnowledgeSource")
+
+# A plan task stores its ``outputs`` as ESS "open" (dynamic) properties, which share
+# one hard per-item budget on the service (the ESS OpenType cap — 25,600 bytes at the
+# time of writing; exceeding it is rejected as ``OpenTypeTooLarge`` / BadRequest, which
+# surfaces to the caller as an opaque 500). Task outputs are meant to be a *compact
+# reference* — a key, a kind, a few value-add attributes (id, name, counts) and an
+# optional ``inventoryRef`` pointer to the durable record that actually holds the bulk
+# detail — never the bulk itself (e.g. a full tenant-inventory crawl). This budget is
+# deliberately below the server cap to leave headroom for the task item's other open
+# properties; guard the size here so an oversized completion fails fast with an
+# actionable message instead of an opaque backend error.
+_MAX_COMPLETION_OUTPUTS_BYTES = 20_000
 
 
 def _normalize_completion_outputs(outputs: Any) -> list[dict[str, Any]]:
@@ -106,6 +119,15 @@ def _normalize_completion_outputs(outputs: Any) -> list[dict[str, Any]]:
         if output.get("inventoryRef"):
             artifact["inventoryRef"] = output["inventoryRef"]
         normalized.append(artifact)
+    size = len(json.dumps(normalized, ensure_ascii=False))
+    if size > _MAX_COMPLETION_OUTPUTS_BYTES:
+        raise ValueError(
+            f"completion outputs are too large ({size} bytes; limit "
+            f"{_MAX_COMPLETION_OUTPUTS_BYTES}). Task outputs must be a compact "
+            "reference — id, name, a few value-add attributes, and an inventoryRef "
+            "pointer — not bulk detail like a full inventory crawl. Attach the "
+            "summary and keep the detail in its durable record."
+        )
     return normalized
 
 
