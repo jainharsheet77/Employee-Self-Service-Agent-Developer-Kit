@@ -60,6 +60,37 @@ task. It's a safe no-op (exit 1, nothing written) when the workspace has no plan
 task produces `tenantInventory`, so a standalone `/discover` leaves the plan untouched.
 You never pin `tenantInventory` by hand.
 
+## Sync each local complete to the shared plan — in the same flow
+
+`capture-setup --complete`, `capture-discover --complete`, and `pin-output
+--complete` mark the task **Completed in the local cache and flag it
+`pendingSync`** — "done locally, not yet on the shared plan". That flag is a
+promise to sync, not a resting state: each prints, on stderr, a *"Syncing
+progress to the shared plan"* note with the exact next step. Act on it
+**immediately, in the same turn, without waiting to be asked**:
+
+1. Read the sync arguments — `python scripts/planner/cli.py pending-sync` prints
+   `{projectId, planId, tasks:[{taskId, etag, outputs}, …]}` for every pending
+   task (empty `tasks` → nothing to sync).
+2. For each, call **`complete_project_plan_task`** (`projectId`, `planId`,
+   `taskId`, `outputs`, `etag`) — the Ongoing-edits tool in
+   `src/skills/planner/sync.md`.
+3. **On success**, re-hydrate (`get_project_plan` + `list_project_plan_tasks` →
+   `import-remote-plan`) so the cache carries the server's confirmation — that
+   clears `pendingSync` on its own. (Quick alternative when you aren't
+   re-hydrating: `python scripts/planner/cli.py mark-synced --task <T#>`.)
+4. **On failure**, walk the sign-in ladder at the top of `sync.md` (401 → one MCP
+   restart + one retry → then local). If it still can't reach the shared plan the
+   completion **stays saved locally as `pendingSync` and syncs automatically on
+   the next successful entry** — say the one sanctioned plain line from that
+   ladder (*"I'll keep the plan local for now; it'll save to the shared space on
+   the next successful sync"*) and continue. Never name the service/tool.
+
+You never have to be asked to sync, and the sponsor never triggers it. The task
+reads **Completed** throughout; `pendingSync` is just the internal "not yet
+confirmed" marker — a later pull **preserves** it (it never reverts an unpushed
+local completion), so the next entry picks the sync back up on its own.
+
 ## Reconcile a first-run setup that already ran
 
 On a shared agent the Power Platform admin usually runs `/setup` as their
@@ -181,6 +212,9 @@ they read the `environmentId` from the summary/plan rather than hunting for it.
 
 - Advance Task state as work happens:
   `python scripts/planner/cli.py set-state --task <T#> --state InProgress|Completed`.
+- Whenever a `--complete` (or `set-state ... Completed`) closes a task, **sync it
+  to the shared plan in the same turn** — see *Sync each local complete to the
+  shared plan* above; don't leave a completion sitting `pendingSync`.
 - Completing a Task whose `produces` keys are now pinned can unblock downstream
   Tasks that `consume` them — point that out to the sponsor.
 - Show `python scripts/planner/cli.py summary` so "where are we" is answerable

@@ -59,6 +59,8 @@ from planner.plan_model import (
 from planner.sync import (
     extract_json_payload,
     hydrate_from_remote,
+    pending_sync_payload,
+    preserve_local_pending,
     stamp_remote_ids,
     to_remote_plan_body,
 )
@@ -90,6 +92,36 @@ def _save(plan: Plan, args: argparse.Namespace) -> None:
     if errors:
         raise PlanInvalidError(errors)
     plan.save_all(args.plan)
+
+
+def _emit_sync_progress(plan: Plan, task_ids: list[str]) -> None:
+    """Tell the agent a local completion should now be synced to the shared plan.
+
+    The CLI is network-free (src/skills/planner/sync.md), so it marks the task
+    ``pendingSync`` and prints — to **stderr**, so stdout stays the clean artifact
+    JSON the skill parses — a note to sync it **in the same flow, without waiting to
+    be asked**. The agent runs ``pending-sync`` for the exact
+    ``complete_project_plan_task`` arguments, syncs, then ``import-remote-plan`` (or
+    ``mark-synced``) to confirm. If the shared plan can't be reached the task stays
+    saved locally and syncs automatically on the next connection — the skill lets
+    the sponsor know plainly."""
+    if not task_ids:
+        return
+    ids = ", ".join(task_ids)
+    print(
+        "Syncing progress to the shared plan — " + ids + " is complete locally and "
+        "will now be saved to the shared plan (flagged pendingSync until confirmed). "
+        "In this same flow, without waiting to be asked:\n"
+        "  1. run `pending-sync` for the exact complete_project_plan_task arguments "
+        "(projectId, planId, taskId, outputs, etag),\n"
+        "  2. call complete_project_plan_task for each pending task,\n"
+        "  3. on success, re-hydrate with `import-remote-plan` (or `mark-synced "
+        "--task <id>`) to confirm.\n"
+        "If the shared plan can't be reached: the completion stays saved locally and "
+        "syncs automatically on the next successful connection — let the sponsor know "
+        "plainly that it is saved locally and not yet on the shared plan.",
+        file=sys.stderr,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -406,6 +438,7 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
             )
         else:
             plan.set_task_state(task_id, "Completed")
+            plan.mark_task_pending_sync(task_id)
         # One skill run can satisfy several plan tasks — e.g. /setup both records
         # the environment (primaryEnvironment) AND clones the agent (essAgent). If
         # the plan splits those into separate tasks, close every OTHER task this
@@ -432,12 +465,15 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
                 for key in produces:
                     pinned_by_key[key]["producedByTaskId"] = tid
                 plan.set_task_state(tid, "Completed")
+                plan.mark_task_pending_sync(tid)
                 also_completed.append(tid)
         if also_completed:
             print(
                 "Also completed (produced by this run): " + ", ".join(also_completed),
                 file=sys.stderr,
             )
+        if complete_ok:
+            _emit_sync_progress(plan, [task_id, *also_completed])
     _save(plan, args)
     print(json.dumps(pinned, indent=2))
     return 0 if complete_ok else 1
@@ -518,6 +554,8 @@ def cmd_capture_discover(args: argparse.Namespace) -> int:
             )
         else:
             plan.set_task_state(task_id, "Completed")
+            plan.mark_task_pending_sync(task_id)
+            _emit_sync_progress(plan, [task_id])
     _save(plan, args)
     print(json.dumps(artifact, indent=2))
     return 0 if complete_ok else 1
@@ -896,12 +934,42 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    # The pull rebuilds the cache wholesale from the service, which would revert a
+    # completion that was saved locally but never pushed (pendingSync). Carry those
+    # forward so an unpushed local completion is never clobbered by the service's
+    # stale state; they stay flagged and the agent re-pushes them.
+    preserved: list[str] = []
+    if os.path.exists(args.plan):
+        try:
+            local_data = Plan.load(args.plan).data
+        except (OSError, ValueError, json.JSONDecodeError):
+            local_data = None
+        if local_data:
+            before = {
+                t.get("remoteId") or t.get("id")
+                for t in local_data.get("tasks", [])
+                if isinstance(t, dict) and t.get("pendingSync")
+            }
+            data = preserve_local_pending(data, local_data)
+            preserved = [
+                t.get("id", "")
+                for t in data.get("tasks", [])
+                if t.get("pendingSync") and (t.get("remoteId") or t.get("id")) in before
+            ]
+
     plan = Plan(data)
     plan.save_all(args.plan)
     print(
         f"Imported plan {data.get('planId') or '(no id)'} "
         f"with {len(data.get('tasks', []))} task(s)"
     )
+    if preserved:
+        print(
+            "Preserved unpushed local completion(s): " + ", ".join(preserved)
+            + " — still pendingSync; sync them to the shared plan with "
+            "complete_project_plan_task (run `pending-sync` for the arguments).",
+            file=sys.stderr,
+        )
     warnings = plan.validate()
     if warnings:
         print("Note — local validation flagged (not blocking the import):", file=sys.stderr)
@@ -921,6 +989,49 @@ def cmd_stamp_remote(args: argparse.Namespace) -> int:
     )
     _save(plan, args)
     print(f"Stamped remote identity: project={args.project_id} plan={args.plan_id}")
+    return 0
+
+
+def cmd_pending_sync(args: argparse.Namespace) -> int:
+    """Print the push backlog: tasks completed locally but not yet confirmed on the
+    shared planner, with the exact ``complete_project_plan_task`` arguments.
+
+    **Read-only.** The agent runs this after a capture ``--complete`` (or on
+    ``/planner`` entry) to push each pending completion — ``tasks`` is empty when
+    nothing is outstanding. Each entry carries the service ``taskId``, the ETag to
+    guard the PATCH, and the produced ``outputs`` already in the tool's shape."""
+    plan = _load(args)
+    print(json.dumps(pending_sync_payload(plan), indent=2))
+    return 0
+
+
+def cmd_mark_synced(args: argparse.Namespace) -> int:
+    """Clear the pending-sync flag on a task (or ``--all``) once its completion is
+    confirmed on the shared planner.
+
+    Use after a successful ``complete_project_plan_task`` push when a full
+    ``import-remote-plan`` re-hydrate isn't being run (the re-hydrate clears the
+    flag on its own). An unknown ``--task`` id fails loudly."""
+    plan = _load(args)
+    if args.all:
+        cleared = [t["id"] for t in plan.pending_sync_tasks()]
+        for tid in cleared:
+            plan.clear_task_pending_sync(tid)
+    else:
+        if not args.task:
+            print("mark-synced requires --task <id> or --all.", file=sys.stderr)
+            return 1
+        try:
+            plan.clear_task_pending_sync(args.task)
+        except KeyError:
+            print(f"No such task: {args.task!r}.", file=sys.stderr)
+            return 1
+        cleared = [args.task]
+    _save(plan, args)
+    if cleared:
+        print("Cleared pendingSync: " + ", ".join(cleared))
+    else:
+        print("No pending-sync tasks to clear.")
     return 0
 
 
@@ -1151,6 +1262,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--plan-id", dest="plan_id", required=True)
     p.add_argument("--etag", help="plan ETag for optimistic concurrency (optional)")
     p.set_defaults(func=cmd_stamp_remote)
+
+    p = sub.add_parser(
+        "pending-sync",
+        help="list completions saved locally but not yet on the shared plan, with "
+             "the complete_project_plan_task arguments to sync each (read-only)",
+    )
+    p.set_defaults(func=cmd_pending_sync)
+
+    p = sub.add_parser(
+        "mark-synced",
+        help="clear the pendingSync flag on a task once its completion is confirmed "
+             "on the shared plan",
+    )
+    p.add_argument("--task", help="task id to clear (or use --all)")
+    p.add_argument("--all", action="store_true", help="clear every pending-sync task")
+    p.set_defaults(func=cmd_mark_synced)
 
     return parser
 
