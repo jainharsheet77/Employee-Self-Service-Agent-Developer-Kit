@@ -61,7 +61,7 @@ mock transport.
 |---|---|---|---|
 | Storage | the live WeveNova service | the live service, via a local MCP server | a dict |
 | Auth | caller supplies a token | the server resolves its own | none |
-| Used by | `--direct` | the **default** write path | `--local-only` opt-out, degraded runs, `__main__`, tests |
+| Used by | the MCP server, internally | the live write path | `--local-only` opt-out, degraded runs, `__main__`, tests |
 
 The in-memory one reproduces the service's *observable* semantics — whole-inventory sync
 (absence retires, parents written before children, the environment/children invariant
@@ -72,24 +72,25 @@ passed.
 
 Call counters used only by assertions live in `tests/spies.py`, not in the shipped class.
 
-### The MCP write path (the default)
+### The MCP write path (the only live path)
 
 `McpInventoryClient` does not speak HTTP. It spawns
-`solutions/ess-maker-skills/src/mcp/wevenova/server.py` and talks JSON-RPC to it over
-stdio, and *that* server holds the `HttpInventoryClient`. Two reasons this indirection
-earns its keep, and why it is the default:
+`solutions/ess-maker-skills/src/mcp/agentconfig_planner/server.py` — the ess-planner MCP,
+which owns the inventory tools alongside the planner tools — and talks JSON-RPC to it over
+stdio, and *that* server holds the `HttpInventoryClient`. Two reasons the crawler never
+calls the API itself, and why this is the only live write path:
 
-- **The token never enters the crawler.** The server resolves one itself, in order:
-  `WEVENOVA_ACCESS_TOKEN`, then the gitignored `.local/wevenova_token` file, then a
-  Windows PowerShell 5.1 `New-WeveTeamsClientToken` mint. It caches the result in memory
-  and re-resolves once on a 401. Nothing to paste, and no token in a shell history or a
-  `.env`. **This is the only path that reads the token file** — `--direct` does not.
+- **The token never enters the crawler.** The server resolves one itself: an explicit
+  `WEVENOVA_ACCESS_TOKEN`, else the planner's cached MSAL sign-in (the same shared token
+  cache the planner skill uses). The Inventory API accepts the planner's `weve/.default`
+  scope, so a maker already signed in for the planner gets a silent token — nothing to
+  paste, and no token in a shell history or a `.env`.
 - **The self-signed dev certificate is handled in one place.** The server defaults to
   not verifying TLS because the tunnel's certificate is self-signed; the crawler keeps
   its safe default of verifying.
 
-HTTP correctness is not duplicated — the server delegates to the same
-`HttpInventoryClient` the direct path uses, so URL shape, idempotency keys, ETag
+HTTP correctness is not duplicated — the server delegates to a single
+`HttpInventoryClient`, so URL shape, idempotency keys, ETag
 handling, and the retry policy have exactly one implementation.
 
 The `{"ok": …}` envelope every tool returns carries the exception *type* plus
@@ -97,49 +98,40 @@ The `{"ok": …}` envelope every tool returns carries the exception *type* plus
 what keeps the runner's retry, drift, and abort behaviour identical on both paths.
 
 ```bash
-pip install -r solutions/ess-maker-skills/src/mcp/wevenova/requirements.txt
+pip install -r solutions/ess-maker-skills/src/mcp/agentconfig_planner/requirements.txt
 
 python solutions/ess-maker-skills/scripts/discover_inventory.py \
   --tenant-id {TENANT_ID} \
   --json-out workspace/discover/results.json
 ```
 
-`--via-mcp` predates this becoming the default and is now a no-op, still accepted so
-existing commands keep working. `--direct` opts out and calls the API from the crawler
-process, which then needs its own token: `WEVENOVA_ACCESS_TOKEN`, else an interactive
-MSAL sign-in. Because the app id that flow can obtain is not admitted by
-`ManageAgentConfigurationFromAuthorizedApp`, `--direct` generally degrades — which is
-exactly why it is not the default. If the server cannot start or cannot reach the API,
-the run degrades to the local mirror and exits `2`, same as the direct path.
+`--via-mcp` predates this being the only live path and is now a no-op, still accepted so
+existing commands keep working. The crawler never acquires its own token: a token it
+could mint would be for an app id that `ManageAgentConfigurationFromAuthorizedApp` does
+not admit, so it would be rejected with a consent error (AADSTS65002) — which is exactly
+why there is no direct path. If the server cannot start or cannot reach the API, the run
+degrades to the local mirror and exits `2`; re-running once the MCP path is healthy
+reconciles the tenant inventory from the up-to-date mirror.
 
 The server can also be pointed elsewhere, or handed a token directly, through its
 environment: `WEVENOVA_BASE_URL`, `WEVENOVA_ACCESS_TOKEN`, `WEVENOVA_VERIFY_TLS`. The
 bridge only forwards a base URL you asked for explicitly — never its own production
 default, which would otherwise silently redirect an MCP run at production.
 
-#### If your machine is not TDS-paired
+#### Supplying a token explicitly
 
-`New-WeveTeamsClientToken` needs a paired machine (`Test-TdsMachinePair` must return
-`True`). Insomnia works without pairing because it *replays* a token rather than minting
-one, so a working Insomnia setup does not imply minting works.
-
-The server resolves a token in this order:
-
-1. `WEVENOVA_ACCESS_TOKEN`
-2. the token file — `solutions/ess-maker-skills/.local/.wevenova_token`, overridable
-   with `WEVENOVA_TOKEN_FILE`
-3. `New-WeveTeamsClientToken` via Windows PowerShell 5.1
-
-So the unblock is to paste the same token you use in Insomnia into that file:
+The server reuses the planner skill's sign-in, so a maker already signed in for the
+planner needs nothing extra. To hand it a token directly instead — for CI, or a token
+minted elsewhere — set `WEVENOVA_ACCESS_TOKEN`, which takes precedence over the cached
+sign-in:
 
 ```powershell
-# .local/ is gitignored. A leading "Bearer " and a UTF-8 BOM are both tolerated.
-Set-Content solutions/ess-maker-skills/.local/.wevenova_token '<token>'
+# No "Bearer " prefix; the value is re-read on every attempt.
+$env:WEVENOVA_ACCESS_TOKEN = '<token>'
 ```
 
-The file is re-read on every mint, not cached at startup, so refreshing it mid-crawl is
-picked up by the automatic 401 retry instead of failing the rest of the run. `Set-TdsMachinePair`
-remains the permanent fix — once paired, no file is needed.
+Because the override is re-read on every attempt and not cached at startup, refreshing it
+mid-crawl is picked up rather than failing the rest of the run.
 
 ## The Inventory API surface
 
@@ -373,12 +365,11 @@ the default production origin has no such route. To exercise it against a local 
 through the `HttpTunnel`:
 
 ```powershell
-# 1. Supply a token. Easiest: drop a bearer token (no "Bearer " prefix) into
-#    solutions/ess-maker-skills/.local/wevenova_token -- gitignored, and read on
-#    every call, so refreshing it mid-crawl is picked up. WEVENOVA_ACCESS_TOKEN
-#    takes precedence if set.
+# 1. Supply a token via WEVENOVA_ACCESS_TOKEN (no "Bearer " prefix) -- the server
+#    reads it on every attempt, so refreshing it mid-crawl is picked up, and it
+#    overrides the planner's cached sign-in.
 #
-#    Alternatively mint one, if this machine is paired. Must be Windows PowerShell
+#    Mint one below, if this machine is paired. Must be Windows PowerShell
 #    5.1: the Dev.* modules use System.Net.ICertificatePolicy, which does not exist
 #    on .NET Core. The AppId is Apps.Sydney -- the only app id admitted by
 #    ManageAgentConfigurationFromAuthorizedApp. The extra wid is Global Administrator.

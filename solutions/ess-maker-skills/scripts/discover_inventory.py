@@ -39,17 +39,14 @@ single whole-inventory ``syncInventory`` call. The crawl is always scoped to the
 
    Write path (persisting is the default -- it is the point of a discovery pass):
 
-   - default        -> the local WeveNova MCP server (``src/mcp/wevenova/server.py``),
-     which proxies to the Inventory API at ``https://substrate.office.com/weveb2``.
+   - default        -> the ess-planner MCP server
+     (``src/mcp/agentconfig_planner/server.py``), which owns the inventory write path
+     and proxies to the Inventory API at ``https://substrate.office.com/weveb2``.
      Override the origin with ``--base-url`` or ``WEVENOVA_BASE_URL`` for other rings
      and dev tunnels. The server resolves its own token: ``WEVENOVA_ACCESS_TOKEN``,
-     else the saved ``.local/wevenova_token`` file, else a local PowerShell mint. This
-     is the default because it is the only path that reads the saved token file, so it
-     needs no interactive sign-in.
-   - ``--direct``     -> call the Inventory API from this process instead. Acquires its
-     own token from ``WEVENOVA_ACCESS_TOKEN``, else the kit's standard MSAL interactive
-     sign-in against the shared ``.local/.token_cache.bin``. Does **not** read
-     ``.local/wevenova_token``.
+     else the planner's cached MSAL sign-in (shared with the planner skill). This is
+     the default because it reuses that existing sign-in, so a crawl persists through
+     the same MCP without a second credential.
    - ``--local-only`` -> explicit opt-out: crawl, validate, and update the local
      mirror without contacting the service.
 
@@ -58,12 +55,14 @@ single whole-inventory ``syncInventory`` call. The crawl is always scoped to the
    reports ``writeDegraded`` with the reason, and exits ``2`` -- the crawl results are
    still saved, but the run never claims to have persisted anything it did not.
 
-   .. warning::
-      The live write path needs the calling app id to be admitted by the service's
-      ``ManageAgentConfigurationFromAuthorizedApp`` policy, which admits a single
-      first-party app (Sydney). A token minted by this CLI is therefore rejected with
-      403 -- which is why ``--direct`` generally degrades, and why the default path
-      relies on a supplied token instead.
+   .. note::
+      The live write path runs entirely through the ess-planner MCP server, which signs
+      in as the AgentConfiguration client WeveNova preauthorizes for the
+      ``weve/.default`` scope and admits under its
+      ``ManageAgentConfigurationFromAuthorizedApp`` policy. When that server cannot be
+      reached the run degrades to the local mirror and exits ``2``; re-running once the
+      MCP path is healthy reconciles the mirror to the service -- a sync is a full
+      upsert/retire against the crawled end state, so nothing is lost in the meantime.
 
 Exit codes:
    0 = crawl succeeded and the inventory was updated (or --local-only was requested)
@@ -109,9 +108,7 @@ if _CRAWLER_SRC not in sys.path:
 
 from tenant_inventory_discovery.config import (  # noqa: E402
     DEFAULT_INVENTORY_BASE_URL,
-    ENV_ACCESS_TOKEN,
     ENV_BASE_URL,
-    INVENTORY_SCOPE,
     DiscoveryConfig,
     is_loopback_url,
 )
@@ -137,11 +134,6 @@ DEFAULT_INVENTORY_OUT = os.path.join(".local", "inventory.json")
 # Demo mode has no config, so it crawls this one representative environment (the tool
 # only ever crawls a single environment -- there is no full-tenant crawl).
 _DEMO_ENV_ID = "env-prod"
-
-# First-party public client used across the kit (auth.py, flightcheck/*_client.py).
-# Shares .local/.token_cache.bin, so a prior Dataverse sign-in often satisfies the
-# Inventory API silently.
-_MSAL_CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
 
 def _demo_platform_and_inventory():
@@ -294,135 +286,34 @@ def _live_platform():
     return platform, platform.environment_id
 
 
-def _acquire_inventory_token(tenant_id):
-    """Return ``(token, source)`` for the Inventory API, or raise ``RuntimeError``.
-
-    ``WEVENOVA_ACCESS_TOKEN`` wins when set -- it is the escape hatch for CI and for
-    anyone holding a token the interactive flow cannot mint. Otherwise fall back to the
-    kit's standard MSAL interactive flow against the shared ``.local/.token_cache.bin``
-    cache, so a maker who already signed in for Dataverse usually gets a silent token.
-    """
-    token = os.environ.get(ENV_ACCESS_TOKEN)
-    if token:
-        return token, ENV_ACCESS_TOKEN
-
-    try:
-        import msal
-    except ImportError as exc:  # pragma: no cover - msal is a kit dependency
-        raise RuntimeError(
-            f"msal is not installed and {ENV_ACCESS_TOKEN} is not set, so no "
-            "Inventory API token could be acquired."
-        ) from exc
-
-    cache = msal.SerializableTokenCache()
-    cache_path = os.path.join(".local", ".token_cache.bin")
-    if os.path.exists(cache_path):
-        with open(cache_path, "r", encoding="utf-8") as fh:
-            cache.deserialize(fh.read())
-
-    app = msal.PublicClientApplication(
-        _MSAL_CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{tenant_id}",
-        token_cache=cache,
-    )
-    accounts = app.get_accounts()
-    result = None
-    if accounts:
-        result = app.acquire_token_silent([INVENTORY_SCOPE], account=accounts[0])
-    if not result or "access_token" not in result:
-        print("Opening browser for WeveNova Inventory API sign-in...")
-        result = app.acquire_token_interactive(
-            [INVENTORY_SCOPE], prompt="select_account"
-        )
-
-    if "access_token" not in result:
-        # Don't echo error_description: it can carry tenant ids and internal flow
-        # details (CWE-209). Mirrors the auth.py / graph_client.py pattern.
-        raise RuntimeError(
-            f"Inventory API authentication failed "
-            f"({result.get('error', 'unknown_error')})."
-        )
-
-    if cache.has_state_changed:
-        os.makedirs(".local", exist_ok=True)
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        if hasattr(os, "O_BINARY"):
-            flags |= os.O_BINARY
-        fd = os.open(cache_path, flags, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            fh.write(cache.serialize())
-
-    return result["access_token"], "interactive sign-in"
-
-
 def _build_inventory_client(
-    base_url,
-    local_only,
-    tenant_id,
-    config,
-    insecure=False,
-    via_mcp=False,
-    explicit_base=None,
+    local_only, tenant_id, config, insecure=False, explicit_base=None
 ):
     """Pick the write path and return ``(client, write_path_label, degraded_reason)``.
 
-    Persisting to WeveNova is the default: a discovery pass exists to update the
-    tenant inventory, so writing is the intent and ``--local-only`` is the explicit
-    opt-out. When the live path cannot be used the run does *not* silently succeed --
-    it falls back to the local mirror, reports the failure, and exits non-zero.
-
-    The live path is pre-flighted before the crawl so an unusable endpoint or a
-    rejected token surfaces immediately instead of at the sync, after minutes
-    of enumeration.
+    Persisting to WeveNova is the default: a discovery pass exists to update the tenant
+    inventory, so writing is the intent and ``--local-only`` is the explicit opt-out.
+    The live path runs through the ess-planner MCP server -- the same server, process,
+    and identity the planner skill uses. When it cannot be used the run does *not*
+    silently succeed: it falls back to the local mirror, reports the failure, and exits
+    non-zero so a later run can reconcile the mirror to the service.
     """
     from tenant_inventory_discovery.in_memory_inventory import InMemoryInventoryClient
 
     if local_only:
         return InMemoryInventoryClient(caps=config.caps), "local-only", None
 
-    if via_mcp:
-        return _build_mcp_client(explicit_base, tenant_id, config, insecure)
-
-    from tenant_inventory_discovery.inventory_client import HttpInventoryClient
-
-    try:
-        token, source = _acquire_inventory_token(tenant_id)
-    except Exception as exc:  # noqa: BLE001 - degrade, never abort the crawl
-        return (
-            InMemoryInventoryClient(caps=config.caps),
-            "local-only",
-            f"could not acquire a token ({exc})",
-        )
-
-    config.inventory_base_url = base_url
-    client = HttpInventoryClient(
-        tenant_id,
-        config=config,
-        auth_token_provider=lambda: token,
-        verify=not (insecure or is_loopback_url(base_url)),
-    )
-    try:
-        client.probe()
-    except Exception as exc:  # noqa: BLE001 - degrade, never abort the crawl
-        client.close()
-        return (
-            InMemoryInventoryClient(caps=config.caps),
-            "local-only",
-            f"{base_url} rejected the pre-flight request using the token from "
-            f"{source} ({exc}){_tls_hint(exc, insecure)}",
-        )
-
-    return client, base_url, None
+    return _build_mcp_client(explicit_base, tenant_id, config, insecure)
 
 
 def _build_mcp_client(explicit_base, tenant_id, config, insecure):
-    """Route writes through the local WeveNova MCP server. This is the default path.
+    """Route writes through the ess-planner MCP server. This is the default path.
 
-    The server resolves its own token (``WEVENOVA_ACCESS_TOKEN``, else the saved
-    ``.local/wevenova_token`` file, else a local PowerShell mint) and handles the dev
-    tunnel's self-signed certificate, so this path needs no interactive sign-in.
-    Configuration is passed through the child's environment because that is the
-    server's only input surface.
+    The server resolves its own token (``WEVENOVA_ACCESS_TOKEN``, else the planner's
+    cached MSAL sign-in shared with the planner skill) and handles the dev tunnel's
+    self-signed certificate, so this path reuses the existing sign-in rather than
+    acquiring a second credential. Configuration is passed through the child's
+    environment because that is the server's only input surface.
 
     ``explicit_base`` is the origin the *user* asked for, not the bridge's production
     default. Forwarding that default would silently override the server's own
@@ -671,27 +562,6 @@ def _persist_local_inventory(inventory, summary, *, tenant_id, mode, write_path,
     return doc
 
 
-def _resolve_write_path(args):
-    """Settle ``args.via_mcp`` from the write-path flags, rejecting contradictions.
-
-    The MCP server is the default because it is the only path that reads the saved
-    ``.local/wevenova_token`` file. The direct path acquires its own token, and the app
-    id it can mint for is not admitted by the service's authorization policy, so
-    defaulting to it makes an ordinary run degrade to the local mirror and exit 2.
-
-    ``--via-mcp`` predates the flip and is now a no-op, kept so existing commands and
-    docs keep working rather than failing on an unrecognized argument.
-    """
-    if args.via_mcp and args.direct:
-        raise SystemExit("--via-mcp conflicts with --direct. Pick one write path.")
-    if args.direct and args.local_only:
-        raise SystemExit(
-            "--direct conflicts with --local-only. Pick one write destination."
-        )
-    args.via_mcp = not args.direct
-    return args
-
-
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         prog="discover_inventory.py",
@@ -748,18 +618,9 @@ def main(argv=None) -> int:
         "--via-mcp",
         action="store_true",
         help=(
-            "Deprecated and now the default; accepted so existing commands keep "
-            "working. Use --direct to opt out."
-        ),
-    )
-    parser.add_argument(
-        "--direct",
-        action="store_true",
-        help=(
-            "Call the Inventory API directly instead of going through the local "
-            "WeveNova MCP server. The direct path acquires its own token "
-            "(WEVENOVA_ACCESS_TOKEN, else an interactive MSAL sign-in) and does NOT "
-            "read .local/wevenova_token."
+            "Deprecated no-op, accepted so existing commands keep working. The "
+            "ess-planner MCP server is now the only live write path; --local-only is "
+            "the opt-out."
         ),
     )
     parser.add_argument(
@@ -802,18 +663,14 @@ def main(argv=None) -> int:
     except Exception:  # noqa: BLE001 — telemetry must never break the flow
         pass
 
-    _resolve_write_path(args)
-
     config = DiscoveryConfig()
-    base_url, local_only = _resolve_write_mode(args)
+    _, local_only = _resolve_write_mode(args)
 
-    # Warn about the origin that will actually be contacted. Under --via-mcp the bridge
-    # opens no socket itself: the server does, against its own default unless an
-    # explicit base URL was forwarded. Naming the bridge's production default here
-    # would warn about a host nothing is going to talk to.
-    tls_target = base_url
-    if args.via_mcp:
-        tls_target = args.base_url or os.environ.get(ENV_BASE_URL)
+    # Warn about the origin that will actually be contacted. The ess-planner MCP server
+    # opens the socket, not this process, and only against an explicitly supplied base
+    # URL -- otherwise it uses its own dev-tunnel default, a host this process cannot
+    # name, so there is nothing to warn about.
+    tls_target = args.base_url or os.environ.get(ENV_BASE_URL)
 
     if args.insecure_skip_tls_verify and tls_target:
         if not is_loopback_url(tls_target):
@@ -854,12 +711,10 @@ def main(argv=None) -> int:
 
         progress.phase("Checking where the inventory will be recorded")
         inner, write_path, degraded_reason = _build_inventory_client(
-            base_url,
             local_only,
             args.tenant_id,
             config,
             args.insecure_skip_tls_verify,
-            args.via_mcp,
             args.base_url or os.environ.get(ENV_BASE_URL),
         )
         if degraded_reason:
