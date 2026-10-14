@@ -250,8 +250,10 @@ its roles **unassigned** — then verify it holds together with
 `python scripts/planner/cli.py check-deps` and `validate` (the same coherence gate
 `src/skills/planner/edit.md` runs): a clean graph with no dangling consumes before
 you go on. The **eager eval preview** renders the golden prompts, and then you
-**publish to the shared planner** as Draft (`src/skills/planner/sync.md`) and
-**show the plan** — a built plan is never left only in the local cache.
+**show the plan locally** — **storing it to the shared planner is an explicit step
+the sponsor asks for** (`src/skills/planner/sync.md` → *Share*), not an automatic
+create on build; a freshly built plan stays in the maker's workspace until they ask
+to share it.
 **Assigning the roles to people (Phase 4) and any further edits are follow-ups
 the maker opts into after the plan is shown** (`src/skills/planner/interview.md` →
 *After the plan is shown*); editing follows `edit.md`.

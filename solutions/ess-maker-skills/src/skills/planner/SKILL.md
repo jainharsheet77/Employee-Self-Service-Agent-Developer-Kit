@@ -135,21 +135,26 @@ have checked for an existing plan.**
    - **Otherwise**, create one after you have their one-line goal, then build it
      through the phases below:
      `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
-   The moment the plan is built, **publish it automatically** to the
-   shared planner as one object (`src/skills/planner/sync.md`) — never leave it
-   local and never wait for the sponsor to ask you to save it. It publishes as
-   **Draft**; you then ask the sponsor to **activate** it when it's ready to run
-   (an explicit step — the backend never auto-activates).
+   The plan is built **locally** — saved in the maker's workspace and shown to
+   them, but **not** sent to the shared planner yet. **Storing it to the shared
+   planner is an explicit step the sponsor asks for** (`src/skills/planner/sync.md`),
+   never something you do automatically on creation. When the sponsor asks to
+   **share** it, store it — it saves as **Draft**; then **activate** it when it's
+   ready to run (both are explicit steps — the backend never auto-activates). Only
+   the *first* store is the explicit ask; once the plan has been shared, later
+   changes sync automatically.
 
 ## Progress
 
 Use the todo-list tool to track the phases below. Create the list up front and
-mark each phase in-progress → done as you go. Include **Publish to the shared
-planner** as an explicit tracked step **right after Phase 3 (Model)** — the plan
-publishes as Draft with its roles **unassigned**. **Assigning the roles to people is a
-follow-up (Phase 4) after the plan is shown**, and activation is a later explicit
-step once the sponsor confirms it's ready. The plan is not "done" until it has been
-pushed (as Draft); never close out planning with the plan still local.
+mark each phase in-progress → done as you go. After Phase 3 (Model) the plan is
+**shown locally** with its roles **unassigned** — do **not** add an automatic
+"publish" step here. **Sharing it to the shared planner (storing it as Draft) is an
+explicit step the sponsor asks for**, and activation is a later explicit step once
+they confirm it's ready; **assigning the roles to people is a follow-up (Phase 4)
+after the plan is shared and activated**. A freshly built plan stays local — saved
+in the maker's workspace — until the sponsor asks to share it; closing out planning
+with the plan still local is a valid end state, not a gap to chase.
 
 ## Phases
 
@@ -162,7 +167,7 @@ per **First** above instead of re-running the interview.)
 | 1. Research | Ground on Microsoft Learn (TOC crawl) **and the kit's own skills** (setup/connect checklists + role maps) → capabilities, prerequisites, roles, produced/consumed keys, and the deterministic setup decomposition | `src/skills/planner/research.md` |
 | 2. Interview | Ask only the three essentials (goal, scenarios, systems); **default the rest** and let the sponsor edit — then **eagerly render an eval preview** (golden prompts) once scenarios + goals are captured | `src/skills/planner/interview.md` |
 | 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then **show its sequencing** — parallel waves, what's blocked, the critical path | `src/skills/planner/model.md` |
-| 4. Assign (follow-up) | Suggested after the plan is shown — put names to the roles **only when the sponsor asks**, never a pre-publish gate or a fired question | `src/skills/planner/assign.md` |
+| 4. Assign (follow-up) | Suggested after the plan is shown — put names to the roles **only when the sponsor asks**, never a gate before sharing or a fired question | `src/skills/planner/assign.md` |
 | 5. Evaluate (preview) | Render a scenario-based eval **preview** (golden prompts) — **render-only, generates nothing**; invoked **eagerly from Phase 2** once scenarios + goals are captured | `src/skills/planner/evaluate.md` |
 | 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
 
@@ -193,21 +198,23 @@ the plan.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
 >
-> The moment the full task set is modelled (roles **unassigned**), **automatically
-> publish the plan to the shared planner in one create call**
-> (`src/skills/planner/sync.md`) — this is a required step, not something to wait for
-> the sponsor to ask for, and a built plan is never left only in the local cache.
-> **Then show the plan (download link + checklist) and stop — but make the next
-> steps explicit.** Close with a short, scannable **Next steps** readout naming what
-> the sponsor can do next: **edit** the plan, or **share & activate** it (in either
-> order), then **assign the roles to people** once it's active. Keep it a readout the
-> sponsor acts on when ready — not a blocking "what next?" question — and never assign
-> or edit anything yourself. Putting names to the roles (Phase 4,
-> `src/skills/planner/assign.md`) happens only when the sponsor asks. It publishes as
-> **Draft**; activation is an explicit step you take once the sponsor confirms the
-> plan is ready to run (the backend never auto-activates). From then on route task
-> edits, state changes, and captured outputs through the planner tools so the shared
-> service stays authoritative.
+> The moment the full task set is modelled (roles **unassigned**), **show the plan
+> locally — do not store it to the shared planner.** A freshly built plan is saved in
+> the maker's workspace and shown to them; **storing it to the shared planner is an
+> explicit step the sponsor asks for** (`src/skills/planner/sync.md`), never an
+> automatic create on modelling. **Show the plan (download link + checklist) and
+> stop — but make the next steps explicit.** Close with a short, scannable **Next
+> steps** readout naming what the sponsor can do next: **edit** the plan, **share**
+> it (store it to the shared space as a Draft) when it's ready, **activate** it, then
+> **assign the roles to people** once it's active. Keep it a readout the sponsor acts
+> on when ready — not a blocking "what next?" question — and never share, assign, or
+> edit anything yourself. Putting names to the roles (Phase 4,
+> `src/skills/planner/assign.md`) happens only when the sponsor asks. Sharing stores
+> it as **Draft**, and activation is a further explicit step you take once the sponsor
+> confirms the plan is ready to run (the backend never auto-activates). **Once the
+> plan has been shared**, route later task edits, state changes, and captured outputs
+> through the planner tools so the shared service stays authoritative — that ongoing
+> sync is automatic; only the first store is the explicit ask.
 
 ## Building the plan
 
@@ -252,9 +259,10 @@ plan ends the turn: do not fire a blocking "what would you like to do next?" que
 and do not start assigning roles or editing on your own. But make the next steps
 explicit — close with a short, scannable "Next steps" readout, not a buried one-liner:
 (1) **edit** the plan or its assumed defaults (`src/skills/planner/edit.md`),
-(2) **share & activate** the plan when it's ready (`src/skills/planner/sync.md`
-steps 5–6), and (3) **assign the roles to people** once it's active
-(`src/skills/planner/assign.md`) — edit and activate can run in either order. Then
+(2) **share** the plan to the shared space when it's ready and **activate** it
+(`src/skills/planner/sync.md` steps 5–6) — sharing is the explicit step that first
+stores the plan, and (3) **assign the roles to people** once it's active
+(`src/skills/planner/assign.md`) — edit locally before you share. Then
 stop, and run any step only if the sponsor asks in a later turn (see
 `src/skills/planner/interview.md` → *After the plan is shown*).** During
 the interview (Phase 2), once
