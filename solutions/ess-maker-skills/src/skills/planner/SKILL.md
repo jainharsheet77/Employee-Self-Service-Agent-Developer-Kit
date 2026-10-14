@@ -146,7 +146,7 @@ have checked for an existing plan.**
 Use the todo-list tool to track the phases below. Create the list up front and
 mark each phase in-progress → done as you go. Include **Publish to the shared
 planner** as an explicit tracked step **right after Phase 3 (Model)** — the plan
-publishes as Draft with its roles **pooled**. **Naming people to those roles is a
+publishes as Draft with its roles **unassigned**. **Assigning the roles to people is a
 follow-up (Phase 4) after the plan is shown**, and activation is a later explicit
 step once the sponsor confirms it's ready. The plan is not "done" until it has been
 pushed (as Draft); never close out planning with the plan still local.
@@ -162,7 +162,7 @@ per **First** above instead of re-running the interview.)
 | 1. Research | Ground on Microsoft Learn (TOC crawl) **and the kit's own skills** (setup/connect checklists + role maps) → capabilities, prerequisites, roles, produced/consumed keys, and the deterministic setup decomposition | `src/skills/planner/research.md` |
 | 2. Interview | Ask only the three essentials (goal, scenarios, systems); **default the rest** and let the sponsor edit — then **eagerly render an eval preview** (golden prompts) once scenarios + goals are captured | `src/skills/planner/interview.md` |
 | 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then **show its sequencing** — parallel waves, what's blocked, the critical path | `src/skills/planner/model.md` |
-| 4. Assign (follow-up) | Suggested after the plan is shown — put names to the **pooled** roles **only when the sponsor asks**, never a pre-publish gate or a fired question | `src/skills/planner/assign.md` |
+| 4. Assign (follow-up) | Suggested after the plan is shown — put names to the roles **only when the sponsor asks**, never a pre-publish gate or a fired question | `src/skills/planner/assign.md` |
 | 5. Evaluate (preview) | Render a scenario-based eval **preview** (golden prompts) — **render-only, generates nothing**; invoked **eagerly from Phase 2** once scenarios + goals are captured | `src/skills/planner/evaluate.md` |
 | 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
 
@@ -193,19 +193,21 @@ the plan.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
 >
-> The moment the full task set is modelled (roles **pooled**), **automatically
+> The moment the full task set is modelled (roles **unassigned**), **automatically
 > publish the plan to the shared planner in one create call**
 > (`src/skills/planner/sync.md`) — this is a required step, not something to wait for
 > the sponsor to ask for, and a built plan is never left only in the local cache.
-> **Then show the plan (download link + checklist) and stop** — close with a one-line
-> suggestion of the optional follow-ups (name the pooled roles, or edit the plan),
-> without a blocking "what next?" question and without assigning anything yourself.
-> Putting names to the pooled roles (Phase 4, `src/skills/planner/assign.md`) happens
-> only when the sponsor asks. It publishes as **Draft**; activation is an
-> explicit step you take once the sponsor confirms the plan is ready to run (the
-> backend never auto-activates). From then on route task edits, state
-> changes, and captured outputs through the planner tools so the shared service
-> stays authoritative.
+> **Then show the plan (download link + checklist) and stop — but make the next
+> steps explicit.** Close with a short, scannable **Next steps** readout naming what
+> the sponsor can do next: **edit** the plan, or **share & activate** it (in either
+> order), then **assign the roles to people** once it's active. Keep it a readout the
+> sponsor acts on when ready — not a blocking "what next?" question — and never assign
+> or edit anything yourself. Putting names to the roles (Phase 4,
+> `src/skills/planner/assign.md`) happens only when the sponsor asks. It publishes as
+> **Draft**; activation is an explicit step you take once the sponsor confirms the
+> plan is ready to run (the backend never auto-activates). From then on route task
+> edits, state changes, and captured outputs through the planner tools so the shared
+> service stays authoritative.
 
 ## Building the plan
 
@@ -238,21 +240,23 @@ progress / 🔒 blocked or dependency-locked / ⬜ not started); render those li
 
 ```
 **Setup**
-- ⬜ Create a Power Platform Environment — Power Platform Admin (pool)
-- 🔒 Publish the ESS agent — Environment Maker (pool)
+- ⬜ Create a Power Platform Environment — Power Platform Admin
+- 🔒 Publish the ESS agent — Environment Maker
 
 **HR Knowledge**
-- ⬜ Connect SharePoint HR library — Environment Maker (pool)
+- ⬜ Connect SharePoint HR library — Environment Maker
 ```
 
 The checklist and the download link are both required, not optional. **Showing the
-plan ends the turn: do not fire a "what would you like to do next?" question and do
-not start assigning roles or editing on your own. Close with one short suggestion
-line naming the two optional follow-ups — putting names to the pooled roles
-(`src/skills/planner/assign.md`) and editing the plan or its assumed defaults
-(`src/skills/planner/edit.md`) — then stop, and run either one only if the sponsor
-asks in a later turn (see `src/skills/planner/interview.md` → *After the plan is
-shown*).** During
+plan ends the turn: do not fire a blocking "what would you like to do next?" question
+and do not start assigning roles or editing on your own. But make the next steps
+explicit — close with a short, scannable "Next steps" readout, not a buried one-liner:
+(1) **edit** the plan or its assumed defaults (`src/skills/planner/edit.md`),
+(2) **share & activate** the plan when it's ready (`src/skills/planner/sync.md`
+steps 5–6), and (3) **assign the roles to people** once it's active
+(`src/skills/planner/assign.md`) — edit and activate can run in either order. Then
+stop, and run any step only if the sponsor asks in a later turn (see
+`src/skills/planner/interview.md` → *After the plan is shown*).** During
 the interview (Phase 2), once
 scenarios + goals are captured, render the **eager eval preview** (Phase 5,
 `src/skills/planner/evaluate.md`) — render-only, it generates nothing; **Phase 6**

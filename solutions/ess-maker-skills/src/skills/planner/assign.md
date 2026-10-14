@@ -1,14 +1,14 @@
 # Planner — Phase 4: Assign each Task (Flow 1) — a follow-up after the plan is shown
 
-**Default to pooled; don't interview per task.** By the time you get here the plan
+**Default to role-assigned; don't interview per task.** By the time you get here the plan
 is modelled with every Task grounded to a role. **Do not** walk the sponsor through a
 per-task "who does this?" questionnaire before they've seen the plan — that's the
-over-interrogation the flow avoids. Instead, **pool every Task to its grounded role**
+over-interrogation the flow avoids. Instead, **assign every Task to its grounded role**
 (automatic, no questions), publish, and **show the plan** (download link + checklist).
 Naming people to those roles is a **follow-up the sponsor opts into** — suggested in
 one short line after the plan is shown (`src/skills/planner/interview.md` → *After the
 plan is shown*), never a blocking question you fire and never run before the sponsor
-asks. Leaving every role pooled is a complete, valid end state.
+asks. Leaving every role unassigned is a complete, valid end state.
 
 When the sponsor asks to assign (now or later), the role for each Task is already
 grounded from the Learn docs (Phase 3) — their only job is to pick **who**. For each
@@ -20,7 +20,7 @@ role they want to name:
    - If a roles source is wired, show its holders of `{role}` and let the
      sponsor pick one.
    - If not, ask the sponsor for the person's name/identifier, or offer to
-     **leave it open to the role** (a pool any holder can later claim).
+     **leave it open to the role** (any holder can later claim it).
 3. **Record the choice.** For a specific person, `--person` takes their directory
    **object id**, not a name — so once the sponsor names someone, turn that name
    into their `oid` with the shared person-resolution step
@@ -32,7 +32,7 @@ role they want to name:
    # assign a specific person, keeping the grounded role
    python scripts/planner/cli.py assign --task <T#> --role <role> --person <oid>
 
-   # or leave it open to the role (pooled)
+   # or leave it open to the role
    python scripts/planner/cli.py assign --task <T#> --role <role>
    ```
 
@@ -46,18 +46,18 @@ may take the setup Task themselves. That's a convenience, not a rule — assign 
 whoever actually holds the role; a different admin running the Task produces the
 same result and the same capture (Phase 6).
 
-Pool every Task to its grounded role, then **show the summary**. (The eval
+Assign every Task to its grounded role, then **show the summary**. (The eval
 **preview** was already rendered eagerly during the interview — Phase 5,
 `src/skills/planner/evaluate.md`; re-render it here if the scope changed. It is
 render-only and generates nothing.)
 
-**Persist the plan automatically — the instant the task set is modelled and pooled,
+**Persist the plan automatically — the instant the task set is modelled and assigned,
 not after a naming interview.** Publishing is the trigger that follows *modelling*,
 not person-assignment; do not wait for the sponsor to name anyone. Follow
 `src/skills/planner/sync.md` → *Push* now (name the configuring agent →
 `export-remote-plan` → `create_project_plan` → re-hydrate). That publishes the plan
-as **Draft** (roles pooled) and shows it back for review. **Naming people to the
-pooled roles is the follow-up** — route it through the roles attestation flow
+as **Draft** (roles unassigned) and shows it back for review. **Assigning the roles to
+people is the follow-up** — route it through the roles attestation flow
 (`src/skills/roles/nudge.md` → `src/skills/roles/resolve-person.md` →
 `src/skills/roles/attest.md`), which records each person as holding their role for
 the plan (a create — no re-publish needed). A Draft's tasks are read-only until it's
@@ -73,8 +73,8 @@ manual/portal step), and you capture what it produced in Phase 6.
 
 ## Nudge — put real people on the attestable roles
 
-Some Tasks are pooled to an **attestable role** (e.g. `ServiceNowAdmin`,
-`WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather than a named person. Pooled
+Some Tasks are assigned to an **attestable role** (e.g. `ServiceNowAdmin`,
+`WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather than a named person. That
 role work is **invisible** until a real person is recorded as holding that role
 for the plan — so once the plan is published (`src/skills/planner/sync.md`), nudge
 the sponsor to assign those roles to real people. That is what makes the work show
@@ -92,7 +92,7 @@ resolves a name to a directory object id and records the holder against the plan
 (`src/skills/roles/SKILL.md`). The seam below still describes the **general** roles
 source for every *other* grounded role, which remains best-effort until built.
 
-Today a Task carries a Learn-grounded **role** (pooled), and the sponsor picks the
+Today a Task carries a Learn-grounded **role** (unassigned to a person), and the sponsor picks the
 person by hand. The next step wires a real **roles source** behind the same seam
 (`scripts/planner/roles.py` → `RoleSource`), so the planner can:
 

@@ -54,10 +54,10 @@ role, then set `--role` to its **attestable** id (the mapping under *A Task is n
 a skill's steps* below) — the shared planner only accepts attestable roles, so a
 raw grounded slug leaves the Task unassignable. Keep the
 Learn page URL in your research notes (it lives in the research context, §7.6 —
-not as a task field). `--role` pools the Task to that role for now (any holder can
+not as a task field). `--role` assigns the Task to that role for now (any holder can
 pick it up, Flow 2); Phase 4 assigns the actual person.
 
-> **Person comes later.** Today the role is pooled and the sponsor picks a person
+> **Person comes later.** Today the role is unassigned and the sponsor picks a person
 > (Phase 4, Flow 1). A future step resolves *who holds the role* from an external
 > roles API (the `roles.py` `RoleSource` seam — `list_holders(role)`), and a Task
 > can then be assigned a **user together with the role** (`assign --role R
@@ -106,7 +106,7 @@ the environment** (`/setup`) task already produces `primaryEnvironment`/`essAgen
 it emits.
 
 **The `--role` on a Task must be an _attestable_ role — ground it, then map it.**
-A Task is pooled to a role so a real person can be attested onto it (`assign.md` →
+A Task is assigned to a role so a real person can be attested onto it (`assign.md` →
 *Nudge*); only the **closed attestable set** is assignable, so a Task tagged with a
 free-form grounded slug (`app-cloud-app-admin`, `infosec-it`, …) can never surface
 in anyone's "what am I assigned?" view. Take the checklist's `role:`, map it to the
@@ -195,8 +195,8 @@ python scripts/planner/cli.py capture-discover --complete
 
 (auto-detects the plan's discover task; `--dry-run` previews without saving.)
 
-When the tasks are in, **publish the plan (roles pooled) and show it** (download
-link + checklist), then go to Phase 4 — **naming people to the pooled roles is a
+When the tasks are in, **publish the plan (roles unassigned) and show it** (download
+link + checklist), then go to Phase 4 — **assigning the roles to people is a
 follow-up after the plan is shown**, not a pre-publish gate
 (`src/skills/planner/assign.md`).
 

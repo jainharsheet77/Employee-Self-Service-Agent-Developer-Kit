@@ -182,7 +182,7 @@ Grounding and the plan's rules still hold when reconciling. Stop and ask the edi
 a targeted question (rather than inventing) when an edit is unclear, for example:
 
 - A **new task with no clear role** — the role is Learn-grounded, not invented; ask
-  which role, or pool it to a role you can ground, but don't fabricate one.
+  which role, or assign it to a role you can ground, but don't fabricate one.
 - A **retitled row you can't map** to an existing id — ask whether it's a rename of
   an existing task or a brand-new one.
 - A task **marked Completed that still has unmet dependencies**, or whose

@@ -127,7 +127,7 @@ reach the shared plan on the next successful entry.
 ## Push — publish a newly authored plan as one object
 
 **Publishing is automatic and mandatory, not optional.** The moment the plan is
-modelled with its roles **pooled** (end of Phase 3), push it — without waiting for
+modelled with its roles **unassigned** (end of Phase 3), push it — without waiting for
 the sponsor to ask, and without waiting to name people (naming is the Phase 4
 follow-up, after the plan is shown). A plan that still shows `(local, not synced)` /
 has no plan id lives only in the local cache and has **not** been persisted; the
@@ -171,16 +171,17 @@ interview → model), publish it in **one** create call rather than task-by-task
    (one file per flag — never hand-stitch a combined object or run the results
    through PowerShell JSON cmdlets; the CLI strips the trailing `{"result": …}`
    envelope itself). The plan is now cached as **Draft** with real ids.
-5. **Show the plan and ask the sponsor whether to activate it.** Present the plan
+5. **Show the plan, then spell out the two next steps — edit it, or share & activate it.** Present the plan
    and offer the Markdown for them to **download and review** — render its clickable
    link in chat first (the `summary` command prints the exact
    `📄 [ESS-scenario-plan.md](…)` line; emit it verbatim, above the body — see
    *Building the plan* in `src/skills/planner/SKILL.md`). The plan is already Draft
    with its assignees
-   baked in, and a Draft's tasks are **read-only** until it's Active — so the
-   real choice now is simply *when* to activate:
+   baked in, and a Draft's tasks are **read-only** until it's Active. So name the
+   two things the sponsor can do next — in **either order**, edit-then-activate or
+   activate-then-refine:
    - **Activate now** — the plan is ready to run; go to step 6. Activation makes
-     the assigned work real and visible. From then on, put people on the pooled
+     the assigned work real and visible. From then on, put people on the
      roles (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`), hand
      tasks to named owners (`src/skills/planner/assign.md`), and capture outputs —
      all through the task tools against the **Active** plan.
@@ -204,6 +205,14 @@ interview → model), publish it in **one** create call rather than task-by-task
    - **A role attestation** (`create_role_assigned_project_plan_task`) is a
      create and takes **no** etag at all.
    Once the plan is Active, later edits and assignments need no re-activation.
+
+   **Then make role assignment the explicit next step.** The instant the plan is
+   Active, the headline next action is **assigning the roles to people** so each
+   owner can see their tasks — say so plainly and offer to do it right now
+   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Editing still
+   works after activation, but those edits now reach **both** the local plan **and**
+   the shared service — route them through the task tools (*Ongoing edits* below),
+   not the local cache alone.
 
 If `export-remote-plan` errors that the configuring agent name is required, you
 skipped step 1 — set it, then re-export.
@@ -244,17 +253,20 @@ token, so:
   assignments to hunt for your own id; never read the project's owner id as if it
   were the caller. The tool already knows who you are.
 - **Don't re-derive role gating locally.** What comes back already includes both
-  the tasks assigned directly to the caller *and* the tasks pooled to every role
+  the tasks assigned directly to the caller *and* the tasks assigned to every role
   they hold — the service expands the caller's roles server-side (attesting a
-  person into a role is what makes that role's pooled tasks appear). The roles the
-  caller holds are evident from the pooled tasks it returns, so state them in
+  person into a role is what makes that role's tasks appear). The roles the
+  caller holds are evident from the tasks it returns, so state them in
   plain language ("you hold the Power Platform admin role") — **never ask "which
   role(s) do you hold?"**.
 - **Call out a first-run setup plainly.** If what comes back includes the caller's
   **setup task** (the one that stands up the environment) still open and no
-  environment is on the plan yet, that is their first step — tell them to run
-  `/setup` **now** (their first-run experience). `task-brief --task <setupTaskId>`
-  flags this as the first-run setup. When they return having run it, capture what
+  environment is on the plan yet, that is their first step — they can stand up the
+  environment **either manually in Copilot Studio or by running `/setup`**, and
+  **`/setup` is the recommended, guided path**, so point them there **now** (their
+  first-run experience).
+  `task-brief --task <setupTaskId>` flags this as the first-run setup. When they
+  return having run it, capture what
   it produced (`src/skills/planner/capture.md`); and if the ESS agent install was
   blocked so `/setup` couldn't finish, still persist the environment they created
   (same file → *When `/setup` is blocked before it records the environment*) so

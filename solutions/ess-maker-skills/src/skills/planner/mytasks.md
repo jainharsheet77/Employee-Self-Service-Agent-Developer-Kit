@@ -6,7 +6,7 @@ each role they hold** — which naturally covers a person with more than one rol
 > **This is the local, service-unreachable fallback — not the primary path.**
 > When the shared planner is reachable, "what are my tasks?" is answered by a
 > single `list_project_plan_tasks_for_caller` call that scopes to the caller by
-> their signed-in identity and returns their direct *and* role-pooled tasks
+> their signed-in identity and returns their direct *and* role-assigned tasks
 > (`src/skills/planner/sync.md`, Flow 2). On that path you **never** resolve a
 > `subjectId`, list role assignments, or ask the person which roles they hold —
 > the service already knows who they are and expands their roles for you. Drop to
@@ -33,7 +33,7 @@ each role they hold** — which naturally covers a person with more than one rol
    - Otherwise resolve the caller's identity (e.g. via Work IQ `/me`) and, **only
      as a last resort**, ask them to confirm which of the plan's roles are theirs.
    Never block on it: if roles stay unknown, show the tasks assigned to them
-   directly and note that the role-pooled view needs the shared planner.
+   directly and note that the role-assigned view needs the shared planner.
 2. **Show their Tasks, grouped by role:**
 
    ```
@@ -42,7 +42,7 @@ each role they hold** — which naturally covers a person with more than one rol
 
    This lists, under each role:
    - Tasks **assigned to them** directly ("assigned to you"), and
-   - Open **pools** for a role they hold ("open to your role"), which they can
+   - Open tasks for a role they hold ("open to your role"), which they can
      pick up.
 
    Render their tasks as a **Step / Task / State** table (per role/group), using
@@ -56,7 +56,7 @@ each role they hold** — which naturally covers a person with more than one rol
    picking up a task they can't complete. Refer to the upstream work by its
    **title**, never an internal task id.
 
-3. **Claiming a pooled Task.** If they take a pooled Task, record them as the
+3. **Claiming a role Task.** If they take a role Task, record them as the
    owner (the role is retained):
 
    ```
@@ -83,12 +83,15 @@ python scripts/planner/cli.py task-brief --task <T#>
   **that** environment (don't let them pick or create a different one), then they
   do their task.
 - **This person's own ready task IS the setup task** (it produces the environment
-  and none is pinned yet) → `task-brief` prints **"First-run setup: run /setup
-  now…"**. This is their first-run experience — tell them to run `/setup` now.
-  When they come back having run it, capture what it produced (Phase 6); and if
-  the ESS agent install was blocked so `/setup` couldn't finish, still persist the
-  environment they created (`src/skills/planner/capture.md` → *When `/setup` is
-  blocked before it records the environment*), keeping the setup task open.
+  and none is pinned yet) → `task-brief` prints **"First-run setup…"**. This is
+  their first-run experience. Spell out that they can stand up the environment
+  **either manually in Copilot Studio or by running `/setup`** — and **recommend
+  `/setup`** as the easier, guided path. When they come back having run it,
+  capture what it produced (Phase 6);
+  and if the ESS agent install was blocked so `/setup` couldn't finish, still
+  persist the environment they created (`src/skills/planner/capture.md` → *When
+  `/setup` is blocked before it records the environment*), keeping the setup task
+  open.
 - **No environment pinned yet** (and this isn't their setup task) → the admin's
   `/setup` task is the prerequisite; the environment hasn't been decided. Don't
   nudge this person to setup — tell them their task is blocked until setup runs,
