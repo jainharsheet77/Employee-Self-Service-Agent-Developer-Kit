@@ -344,9 +344,10 @@ pinned — scenarios + goals are enough to show what "good" looks like.
 
 ## After the plan is shown — stop, and name the next steps (don't run them)
 
-**Showing the plan is the end of the turn.** Once the plan is modelled, published,
-and presented (the download link **then** the grouped task checklist — `SKILL.md` →
-*Building the plan*), **stop there**. Do **not**:
+**Showing the plan is the end of the turn.** Once the plan is modelled and presented
+locally (the download link **then** the grouped task checklist — `SKILL.md` →
+*Building the plan*), **stop there** — the plan stays in the maker's workspace and is
+**not** stored to the shared space until the sponsor asks to share it. Do **not**:
 
 - fire a blocking "What would you like to do next?" question (no `ask_user`, no
   numbered menu) — the plan the sponsor just received is the deliverable, not a
@@ -358,10 +359,11 @@ Instead, close with an explicit, scannable **Next steps** readout — plain lang
 no form, no blocking question — so the sponsor sees exactly what they can do next and
 picks when ready. Make the three paths obvious. Model it on the kit's style:
 
-> Your plan's saved and ready to download above. **Next steps — just say the word:**
-> **1) Edit** the scope or any assumption, **2) Share & activate** the plan when it's
-> ready (you can edit before *or* after activating), and **3) Assign the roles to
-> people** once it's active, so each owner can see their tasks.
+> Your plan's saved locally and ready to download above. **Next steps — just say the
+> word:** **1) Edit** the scope or any assumption, **2) Share** it to save it to the
+> shared space and **activate** it when it's ready (editing is easiest *before* you
+> share), and **3) Assign the roles to people** once it's active, so each owner can
+> see their tasks.
 
 Then **end the turn.** Act on a follow-up **only when the sponsor replies asking for
 it** in a later turn:

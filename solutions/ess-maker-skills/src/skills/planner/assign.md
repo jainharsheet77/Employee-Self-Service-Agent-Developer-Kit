@@ -4,7 +4,9 @@
 is modelled with every Task grounded to a role. **Do not** walk the sponsor through a
 per-task "who does this?" questionnaire before they've seen the plan — that's the
 over-interrogation the flow avoids. Instead, **assign every Task to its grounded role**
-(automatic, no questions), publish, and **show the plan** (download link + checklist).
+(automatic, no questions) and **show the plan** (download link + checklist) — **locally;
+storing it to the shared space is an explicit step the sponsor asks for later**
+(`src/skills/planner/sync.md` → *Share*).
 Naming people to those roles is a **follow-up the sponsor opts into** — suggested in
 one short line after the plan is shown (`src/skills/planner/interview.md` → *After the
 plan is shown*), never a blocking question you fire and never run before the sponsor
@@ -51,22 +53,21 @@ Assign every Task to its grounded role, then **show the summary**. (The eval
 `src/skills/planner/evaluate.md`; re-render it here if the scope changed. It is
 render-only and generates nothing.)
 
-**Persist the plan automatically — the instant the task set is modelled and assigned,
-not after a naming interview.** Publishing is the trigger that follows *modelling*,
-not person-assignment; do not wait for the sponsor to name anyone. Follow
-`src/skills/planner/sync.md` → *Push* now (name the configuring agent →
-`export-remote-plan` → `create_project_plan` → re-hydrate). That publishes the plan
-as **Draft** (roles unassigned) and shows it back for review. **Assigning the roles to
-people is the follow-up** — route it through the roles attestation flow
+**Show the plan locally — don't store it to the shared space on your own.** Storing
+the plan for the first time is an **explicit step the sponsor asks for**, not a
+trigger that follows modelling; do **not** push it just because the task set is
+modelled and assigned. Keep it local (saved in the maker's workspace) and shown for
+review. **When the sponsor asks to share it**, follow `src/skills/planner/sync.md` →
+*Share* (name the configuring agent → `export-remote-plan` → `create_project_plan` →
+re-hydrate), which stores the plan as **Draft** (roles unassigned). **Assigning the
+roles to people is a later follow-up** — route it through the roles attestation flow
 (`src/skills/roles/nudge.md` → `src/skills/roles/resolve-person.md` →
 `src/skills/roles/attest.md`), which records each person as holding their role for
-the plan (a create — no re-publish needed). A Draft's tasks are read-only until it's
-**Active**, and the backend never auto-activates — so once the sponsor is happy,
-**ask them to activate** the plan to put the work in motion (see `sync.md` steps
-5–6). Never leave a freshly built plan local. If the service is unreachable, fall
-back to the local cache and carry on (never mention any of this to the sponsor), and
-push on a later turn once it's reachable — a summary that still shows the plan as
-`(local, not synced)` has **not** been persisted.
+the plan (a create — no re-share needed). A Draft's tasks are read-only until it's
+**Active**, and the backend never auto-activates — so once it's shared and the
+sponsor is happy, **ask them to activate** the plan to put the work in motion (see
+`sync.md` steps 5–6). Leaving a freshly built plan local until the sponsor shares it
+is fine — a summary that shows `(local, not synced)` simply hasn't been shared yet.
 
 The Plan is ready to run: each assignee runs the Task's skill (or does the
 manual/portal step), and you capture what it produced in Phase 6.
@@ -76,8 +77,8 @@ manual/portal step), and you capture what it produced in Phase 6.
 Some Tasks are assigned to an **attestable role** (e.g. `ServiceNowAdmin`,
 `WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather than a named person. That
 role work is **invisible** until a real person is recorded as holding that role
-for the plan — so once the plan is published (`src/skills/planner/sync.md`), nudge
-the sponsor to assign those roles to real people. That is what makes the work show
+for the plan — so once the plan is shared and activated (`src/skills/planner/sync.md`),
+nudge the sponsor to assign those roles to real people. That is what makes the work show
 up in each person's "what am I assigned?" view. Hand off to the roles attestation
 flow to do it — it resolves the person and records the assignment
 (`src/skills/roles/nudge.md`, then `src/skills/roles/resolve-person.md` →

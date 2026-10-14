@@ -104,10 +104,10 @@ Run this the moment `/planner` starts, before deciding whether to interview:
    4. Resume from the refreshed cache (`summary`, Flow 2, next actions) exactly as
       the **First** section of `SKILL.md` describes.
 3. **If the service has no plan but a local `plan.json` exists**, it's an
-   un-pushed draft — resume it locally and, once the sponsor is happy, **push** it
-   (below).
+   un-shared draft — resume it locally and, **when the sponsor asks to share it**,
+   store it (the *Share* step below).
 4. **If neither exists**, start fresh: interview → build the plan through the
-   phases → push.
+   phases → show it locally → share it when the sponsor asks.
 
 `import-remote-plan` writes through without a local validation gate (the service
 is authoritative). It prints any validation notes as warnings — treat them as
@@ -124,18 +124,21 @@ complete* flow) before moving on — then re-hydrate so the server's confirmatio
 clears the flag. This is what makes a completion that failed to push last time
 reach the shared plan on the next successful entry.
 
-## Push — publish a newly authored plan as one object
+## Share — store a newly authored plan to the shared planner (explicit)
 
-**Publishing is automatic and mandatory, not optional.** The moment the plan is
-modelled with its roles **unassigned** (end of Phase 3), push it — without waiting for
-the sponsor to ask, and without waiting to name people (naming is the Phase 4
-follow-up, after the plan is shown). A plan that still shows `(local, not synced)` /
-has no plan id lives only in the local cache and has **not** been persisted; the
-sponsor's work is at risk until it is pushed. Re-run this push after any later change
-the tools didn't already mirror.
+**The first store is an explicit step the sponsor asks for — never automatic.** A
+freshly modelled plan is built and shown **locally** (saved in the maker's
+workspace); it is **not** sent to the shared space on creation. Store it only when
+the sponsor asks to **share** it ("share it", "save it to the shared space", "store
+it"). Do **not** push it the moment it's modelled, and do **not** wait on naming
+people (naming is the Phase 4 follow-up, after the plan is shared and activated). A
+plan that still shows `(local, not synced)` / has no plan id lives only in the local
+cache — that is a valid resting state until the sponsor asks to share it, not a risk
+to chase. **This explicit gate is only for the *first* store**; once the plan has
+been shared, later changes sync automatically (see *Ongoing edits* below).
 
-After you've built the plan locally through the modelling phase (research →
-interview → model), publish it in **one** create call rather than task-by-task:
+When the sponsor asks to share the plan you built locally (research → interview →
+model), store it in **one** create call rather than task-by-task:
 
 1. **Confirm whether this plan targets HR or IT — the only agent axis left.**
    The create body's `configuringAgentName` is required. The ESS agent ships as
@@ -150,10 +153,10 @@ interview → model), publish it in **one** create call rather than task-by-task
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).
-3. **Push it (the plan is created in Draft):** call **`create_project_plan`**
+3. **Store it (the plan is created in Draft):** call **`create_project_plan`**
    with the `projectId`, that body, and an **`idempotencyKey`**. Generate the key
-   once when the publish starts (a fresh UUID) and treat it as belonging to this
-   draft — reuse the *exact same* key on every retry of this same publish. Keying
+   once when the share starts (a fresh UUID) and treat it as belonging to this
+   draft — reuse the *exact same* key on every retry of this same store. Keying
    the create is what makes a retry safe: the service collapses a replay onto the
    same plan instead of creating a duplicate. (An **unkeyed** create is
    deliberately *not* auto-retried, because a blind replay could duplicate the
@@ -171,26 +174,24 @@ interview → model), publish it in **one** create call rather than task-by-task
    (one file per flag — never hand-stitch a combined object or run the results
    through PowerShell JSON cmdlets; the CLI strips the trailing `{"result": …}`
    envelope itself). The plan is now cached as **Draft** with real ids.
-5. **Show the plan, then spell out the two next steps — edit it, or share & activate it.** Present the plan
-   and offer the Markdown for them to **download and review** — render its clickable
-   link in chat first (the `summary` command prints the exact
-   `📄 [ESS-scenario-plan.md](…)` line; emit it verbatim, above the body — see
-   *Building the plan* in `src/skills/planner/SKILL.md`). The plan is already Draft
-   with its assignees
-   baked in, and a Draft's tasks are **read-only** until it's Active. So name the
-   two things the sponsor can do next — in **either order**, edit-then-activate or
-   activate-then-refine:
+5. **Confirm it's saved to the shared space, then offer to activate.** The plan the
+   sponsor already reviewed locally is now stored as a **Draft** with its assignees
+   baked in — tell them it's saved to the shared space (plain language, never name
+   the backend) and re-surface the downloadable *ESS scenario plan* link if helpful
+   (the `summary` command prints the exact `📄 [ESS-scenario-plan.md](…)` line). A
+   Draft's tasks are **read-only** until it's Active, so name the next step:
    - **Activate now** — the plan is ready to run; go to step 6. Activation makes
      the assigned work real and visible. From then on, put people on the
      roles (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`), hand
      tasks to named owners (`src/skills/planner/assign.md`), and capture outputs —
      all through the task tools against the **Active** plan.
-   - **Not yet** — leave it in Draft and keep refining the plan locally (the
-     editable *ESS scenario plan*, `src/skills/planner/edit.md`). Those local
-     edits **can't be pushed onto a Draft**: the service has no "update a Draft"
-     path — re-running `create_project_plan` makes a *new* plan, and a Draft's
-     tasks are read-only — so revisions reach the server only **after activation**
-     (step 6). When practical, finish refining **before** you publish.
+   - **Not yet** — leave it in Draft. Refinement is best done **before** you share:
+     once stored, local edits **can't be pushed onto a Draft** — the service has no
+     "update a Draft" path (re-running `create_project_plan` makes a *new* plan, and
+     a Draft's tasks are read-only), so revisions reach the server only **after
+     activation** (step 6). So steer the sponsor to **finish editing locally before
+     sharing**; if they still need changes once it's a Draft, activate first, then
+     edit.
 6. **Activate when the sponsor is ready — explicitly; the backend won't.** When
    the sponsor confirms the plan is ready to run (step 5), activate it: call
    **`update_project_plan`** with `{"status": "Active"}` and the plan's Draft
