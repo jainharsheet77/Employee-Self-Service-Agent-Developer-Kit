@@ -2054,6 +2054,6 @@ def _render_assignee(assigned: dict[str, Any] | None) -> str:
         return "unassigned"
     role = assignee_role_id(assigned)
     if assigned.get("type") == "Role":
-        return f"{role} (pool)"
+        return role or "unassigned"
     oid = assignee_user_oid(assigned) or "?"
     return f"{oid} (as {role})" if role else oid

@@ -50,8 +50,31 @@ To change an assignment that already exists (rare), read it first with
 `list_plan_role_assignments` (or `get_role_assignment`) to get its **strong**
 ETag, then pass that ETag to `attest_plan_role`. Never pass the plan's weak ETag.
 
+## Several assignments in one go
+
+A maker often names more than one pairing in a single breath — "assign Erica as
+Power Platform admin **and** James as Workday admin", or "make Priya and Sam the
+ServiceNow admins". **Handle every pair — don't drop any, and don't make the maker
+repeat themselves one at a time.**
+
+1. **Parse the utterance into `(person, role)` pairs.** Split on "and" / commas and
+   map each person to the role named for them. If one pairing is genuinely ambiguous
+   (a name with no role, or a role with no person), ask about **that pair only** —
+   don't stall the others.
+2. **Resolve and attest each pair in turn** — for each pair, run person resolution
+   (`src/skills/roles/resolve-person.md`) then `attest_plan_role` (steps 1–2 above).
+   The writes are independent, so one pair failing (needs sign-in, no directory
+   match) never blocks the rest — carry on and track that pair separately.
+3. **Confirm them together.** After the loop, give **one combined** read-back of who
+   now holds what, and call out any pair you couldn't finish and why, so the maker
+   can fix just that one.
+
+> "Done — Erica now holds the Power Platform admin role and James the Workday admin
+> role on this plan. I couldn't find a 'Sam Lee' in your directory, so the ServiceNow
+> admin role is still open — want to try a different name or their email?"
+
 ## After assigning several roles
 
 When the maker has staffed the plan's roles, offer to show who holds what
-(`src/skills/roles/list.md`) so they can confirm nothing pooled is still
+(`src/skills/roles/list.md`) so they can confirm nothing is still
 unassigned.

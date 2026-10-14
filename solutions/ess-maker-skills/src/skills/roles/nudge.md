@@ -1,6 +1,6 @@
 # Roles — nudge role assignment when a plan is created
 
-When a plan is published, some of its tasks are pooled to **roles**
+When a plan is published, some of its tasks are assigned to **roles**
 (e.g. `ServiceNowAdmin`, `WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather
 than to named people. Until a real person is attested into each of those roles,
 that work
@@ -10,12 +10,12 @@ stalls. This nudge closes that gap at the moment the plan is created.
 ## When to nudge
 
 Right after a plan is published/activated (the planner's publish step,
-`src/skills/planner/sync.md`), or whenever a plan is resumed and still has pooled
+`src/skills/planner/sync.md`), or whenever a plan is resumed and still has unclaimed
 attestable-role tasks with nobody attested for them.
 
 ## How to nudge
 
-1. See which roles the plan actually pools work to — its tasks assigned to a role
+1. See which roles the plan actually assigns work to — its tasks assigned to a role
    (`assignedToType: "Role"`) with nobody named on them. Split them against
    `list_attestable_roles`:
    - **Attestable roles** (e.g. `ServiceNowAdmin`, `WorkdayAdmin`) become visible
@@ -33,9 +33,9 @@ attestable-role tasks with nobody attested for them.
 
    If the maker names someone, run the assignment flow
    (`src/skills/roles/resolve-person.md` → `src/skills/roles/attest.md`). If they'd
-   rather leave it, that's fine — the task stays pooled and they can assign it
+   rather leave it, that's fine — the task stays open to the role and they can assign it
    later.
-4. **Non-attestable pooled work still needs a face.** For tasks pooled to a role
+4. **Non-attestable role work still needs a face.** For tasks assigned to a role
    that isn't attestable, there is no attestation that can surface them — they
    stall silently until someone is named. Nudge the maker to hand each one to a
    specific person (`src/skills/planner/assign.md`), naming the work that's
@@ -49,10 +49,10 @@ attestable-role tasks with nobody attested for them.
 
 ## Boundaries
 
-- Nudge **assignment**, don't force it — a maker may deliberately leave a pool
+- Nudge **assignment**, don't force it — a maker may deliberately leave a role
   open for now.
 - This is about *who holds a role*. It is never the "what are my tasks?" view.
 - **Attestable** roles are surfaced by attestation (`src/skills/roles/attest.md`);
-  **non-attestable** pooled work is surfaced only by assigning it to a named
-  person (`src/skills/planner/assign.md`). Either way, no pooled work should be
+  **non-attestable** role work is surfaced only by assigning it to a named
+  person (`src/skills/planner/assign.md`). Either way, no role work should be
   left with no route to visibility.

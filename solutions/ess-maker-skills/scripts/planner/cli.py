@@ -358,7 +358,7 @@ def cmd_assign(args: argparse.Namespace) -> int:
     plan = _load(args)
     plan.assign_task(args.task, role_id=args.role, person_oid=args.person)
     _save(plan, args)
-    who = args.person or f"{args.role} (pool)"
+    who = args.person or f"the {args.role} role"
     print(f"Assigned {args.task!r} to {who}")
     return 0
 
@@ -623,8 +623,9 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
     if brief.get("firstRunSetup"):
         print(
-            "  First-run setup: run /setup now to decide or create the "
-            "environment this plan runs on."
+            "  First-run setup: this plan needs its Power Platform environment "
+            "stood up. You can set it up manually in Copilot Studio, or run /setup "
+            "to decide or create it — running /setup is the recommended path."
         )
     nudge = brief.get("kitSetup")
     if nudge:

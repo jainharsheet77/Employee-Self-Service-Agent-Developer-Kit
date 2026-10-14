@@ -489,8 +489,10 @@ def test_render_task_checklist_groups_by_stream_with_icons_and_roles():
     # Grouped under a bold workstream header, each task `<icon> <title> — <role>`.
     assert "**Setup**" in checklist
     assert "**Workday**" in checklist
-    assert "- ⬜ Create a Power Platform Environment — pp-admin (pool)" in checklist
-    assert "- ⬜ Connect Workday — workday-admin (pool)" in checklist
+    assert "- ⬜ Create a Power Platform Environment — pp-admin" in checklist
+    assert "- ⬜ Connect Workday — workday-admin" in checklist
+    # The maker-facing readback names the role but never the internal "pool" notion.
+    assert "(pool)" not in checklist
     # Streams keep execution order (Setup before Workday).
     assert checklist.index("**Setup**") < checklist.index("**Workday**")
 

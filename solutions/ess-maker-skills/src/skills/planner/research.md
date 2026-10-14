@@ -112,7 +112,7 @@ findings in the research context.
 
 3. **Read the role gating.** `src/reference/ess-docs/setup/role-gating.md` is the
    role × gate matrix every checklist item cites — use it to confirm the
-   attestable role each Task pools to (the grounded→attestable map lives in
+   attestable role each Task is assigned to (the grounded→attestable map lives in
    `model.md`).
 
 4. **Note the produces/consumes each skill implies.** A setup checklist's outputs

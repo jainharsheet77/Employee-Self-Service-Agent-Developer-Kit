@@ -215,7 +215,7 @@ streamed: SSO (Cloud Application Administrator), tenant config (Workday
 administrator), pack + connect (Environment Maker), firewall allowlist (Network
 Administrator), first topic (Environment Maker). Then add the profile-write
 governance sign-off the checklist doesn't cover; its owner (Security / Privacy) isn't
-an attestable pool, so leave it unassigned and let Phase 4 assign the person:
+an attestable role, so leave it unassigned and let Phase 4 assign the person:
 
 ```
 python scripts/planner/cli.py add-task --id workday-profile-signoff --title "Profile-write governance sign-off" --description "Security/Privacy sign-off before enabling Workday profile writes" --consumes workdayConnection --produces workdayWriteSignoff
@@ -246,13 +246,13 @@ An import seeds **Phase 1–2** (research + interview); it does not skip the res
 Once the required gaps are filled and the proposed tasks are in, continue exactly
 as a new plan: **Phase 3** completes the *full* atomic task set grounded in the
 captured systems/scenarios (not just the tasks the upload happened to list) with
-its roles **pooled** — then verify it holds together with
+its roles **unassigned** — then verify it holds together with
 `python scripts/planner/cli.py check-deps` and `validate` (the same coherence gate
 `src/skills/planner/edit.md` runs): a clean graph with no dangling consumes before
 you go on. The **eager eval preview** renders the golden prompts, and then you
 **publish to the shared planner** as Draft (`src/skills/planner/sync.md`) and
 **show the plan** — a built plan is never left only in the local cache.
-**Naming people to the pooled roles (Phase 4) and any further edits are follow-ups
+**Assigning the roles to people (Phase 4) and any further edits are follow-ups
 the maker opts into after the plan is shown** (`src/skills/planner/interview.md` →
 *After the plan is shown*); editing follows `edit.md`.
 

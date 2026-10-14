@@ -53,12 +53,12 @@ Summarise, don't dump the table. Cover three things:
   task can also show a clear dependency marker, so filter to **NotStarted** before
   presenting anything as "next". Call out anything **🔒 Blocked** and the upstream
   task it waits on, so nobody starts work whose inputs don't exist yet.
-- **Vacant roles — flag them so they get filled.** A role the plan pools work to
+- **Vacant roles — flag them so they get filled.** A role the plan assigns work to
   but with **no active holder** — nobody was ever attested, or the person who held
   it was removed / is no longer linked to the plan — is a silent stall: vacancies
   can't be announced proactively, so a status read is the one moment to catch them.
   Read the plan's role assignments (`list_plan_role_assignments` — active holders
-  only) against the roles its pooled tasks need; for any attestable role with no
+  only) against the roles its tasks need; for any attestable role with no
   active holder, name it and the work waiting on it (*"Heads up — the Workday admin
   role is vacant, so the Workday connection tasks can't start until someone holds
   it. Want to assign it?"*) and route filling it through role assignment

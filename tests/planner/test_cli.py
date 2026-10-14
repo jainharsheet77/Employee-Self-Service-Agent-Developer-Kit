@@ -319,7 +319,9 @@ def test_summary_emits_task_checklist_readback(tmp_path, capsys):
     # the download link — so it renders the breakdown instead of a bare task count.
     assert "readback:" in err
     assert "**Workday**" in err
-    assert "- ⬜ Connect Workday — workday-admin (pool)" in err
+    assert "- ⬜ Connect Workday — workday-admin" in err
+    # The role is named, but the internal "pool" notion never leaks to the maker.
+    assert "workday-admin (pool)" not in err
 
 
 def test_pin_output_rejects_malformed_attr(tmp_path, capsys):

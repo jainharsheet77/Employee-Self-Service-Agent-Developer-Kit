@@ -27,6 +27,6 @@ To take a person off a role ("Priya isn't the ServiceNow admin anymore"):
    and/or `role`) — keep its assignment id and ETag.
 2. Call `revoke_role_assignment` with that assignment id (pass the ETag to
    converge). This soft-revokes it — the assignment flips to `Revoked`, and the
-   role's pooled tasks stop showing up for that person.
+   role's tasks stop showing up for that person.
 3. Confirm the effect in plain language: that person no longer sees that role's
    work on the plan.

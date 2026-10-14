@@ -65,6 +65,95 @@ ticketing) they may have wanted.
 That is the whole interview before you build. **Don't ask a fourth kind of
 question** — default the rest and let the sponsor edit it on the generated plan.
 
+### Render the option-based questions as selectable — not free text
+
+Q1 (goal + success) is open-ended, so ask it as free text. **Q2 (scenarios) and Q3
+(system) are option-based — present them as selectable options with
+`vscode_askQuestions`, exactly like the rest of the kit, never as a bare "type your
+answer" prompt.** Both are **multi-select** (`multiSelect: true`) — a maker normally
+wants several scenarios, and an area can touch more than one system — so render these
+as **checkboxes, not radio buttons**. Keep `allowFreeformInput: true` on both so the
+sponsor can also add something not listed; the final answer combines their checkbox
+selections and anything they type.
+
+**Q2 — scenarios (the jobs to self-serve).** Offer the catalogue categories as
+options and let the sponsor **check every job that applies** (picking several is
+normal), adding anything missing via freeform:
+
+```json
+[
+  {
+    "header": "What should employees self-serve?",
+    "question": "Which of these do employees ask about most? Select all that apply — you can add more in your own words.",
+    "multiSelect": true,
+    "options": [
+      { "label": "HR Knowledge", "description": "Answer policy & benefits questions, e.g. 'How many vacation days do I have?'", "recommended": true },
+      { "label": "HR Profile — view", "description": "Let employees see their own details — job title, manager, address, pay" },
+      { "label": "HR Profile — update", "description": "Let employees change their own details, e.g. phone number or emergency contact" },
+      { "label": "HR Ticketing", "description": "Raise & track HR requests, e.g. 'I need a letter for my visa'" },
+      { "label": "IT (knowledge + ticketing)", "description": "Answer IT questions and raise IT tickets, e.g. 'Reset my password'" },
+      { "label": "Manager", "description": "Tools for people managers (approvals, team info) — usually added later, not a first pilot" },
+      { "label": "Handoff", "description": "Hand the conversation to a live agent when the bot can't help" },
+      { "label": "Something else", "description": "Anything not listed, e.g. 'Request time off' — type it in your own words" }
+    ],
+    "allowFreeformInput": true
+  }
+]
+```
+
+**Q3 — the systems behind each scenario area.** Ask once per captured area (or once
+across all areas), grounding the options in the ESS native integrations (Phase 1) and
+letting the sponsor **check every system in play** — an area can span more than one
+(e.g. HR profile on Workday *and* HR tickets on ServiceNow HRSD). SharePoint / M365 is
+a knowledge source, and anything with no native connector needs a custom flow via
+`/create`:
+
+```json
+[
+  {
+    "header": "Which systems hold {area} data?",
+    "question": "For {scenario/area}, which systems hold the data? Select all that apply.",
+    "multiSelect": true,
+    "options": [
+      { "label": "Workday", "description": "Pick this if your HR data lives in Workday (works out of the box)" },
+      { "label": "ServiceNow HRSD", "description": "Pick this if HR cases/requests run on ServiceNow (works out of the box)" },
+      { "label": "ServiceNow ITSM", "description": "Pick this if IT tickets run on ServiceNow (works out of the box)" },
+      { "label": "SAP SuccessFactors", "description": "Pick this if your HR data lives in SAP SuccessFactors (works out of the box)" },
+      { "label": "SharePoint / M365", "description": "Pick this for answers from documents or intranet pages (a knowledge source)" },
+      { "label": "Something else", "description": "Another system with no built-in connector — we'll build a custom link via /create" }
+    ],
+    "allowFreeformInput": true
+  }
+]
+```
+
+Map **each** thing they check (or type) back to the catalogue categories and the
+native connector set exactly as the table rows above describe — multi-select only
+changes *how* you ask, not what you capture or how you ground it. Several scenarios or
+systems in one answer is expected; capture every one (systems are still recorded per
+area, never overwriting each other).
+
+### If the sponsor isn't sure — take the grounded default, don't re-ask
+
+"Not sure", "you decide", or silence is a **valid answer**, not a reason to
+interrogate. This flow already runs on defaults — so when the sponsor can't answer,
+pick the grounded default, **name it in one line**, mark it `--source Agent`, and
+move on. They see it on the plan and change it there.
+
+- **Not sure which scenarios (Q2)** → start with the catalogue's default focus,
+  **HR Knowledge** plus its OOB named-scenario set (the recommended option), and say
+  so: *"I'll start you with HR Knowledge; you can add IT, profile, or ticketing on
+  the plan."* Never leave the scope empty.
+- **Not sure which system (Q3)** → use the candidate system Phase-1 research already
+  proposed for that area if there is one. If there genuinely isn't, **default that
+  area to knowledge-first** (a SharePoint/M365 knowledge task — no connector needed)
+  and record the data-system connection as a **to-confirm** edit: *"I'll set {area}
+  up as a knowledge task for now; tell me the system later and I'll add the
+  connection."* Never stall waiting for the answer.
+
+Never block the build on an unanswered question — a defaulted, clearly-labelled plan
+the sponsor edits beats a stalled interview.
+
 ### Assume these — never ask them up front
 
 For each, use the sponsor's own words if Q1–Q3 already answered it (keep
@@ -253,7 +342,7 @@ built around: goals first, the bar rendered early, then systems and dependencies
 captured right after. Rendering the bar does **not** wait for every system to be
 pinned — scenarios + goals are enough to show what "good" looks like.
 
-## After the plan is shown — stop, and suggest the follow-ups (don't run them)
+## After the plan is shown — stop, and name the next steps (don't run them)
 
 **Showing the plan is the end of the turn.** Once the plan is modelled, published,
 and presented (the download link **then** the grouped task checklist — `SKILL.md` →
@@ -263,23 +352,25 @@ and presented (the download link **then** the grouped task checklist — `SKILL.
   numbered menu) — the plan the sponsor just received is the deliverable, not a
   prompt for more input;
 - start assigning roles, open the edit round-trip, or run any other follow-up on
-  your own. The pooled plan is complete as-is.
+  your own. The plan is complete as-is.
 
-Instead, close with **one short suggestion line** — plain language, no form — naming
-what the sponsor can do next, phrased as an invitation they can take or ignore. Model
-it on the kit's style:
+Instead, close with an explicit, scannable **Next steps** readout — plain language,
+no form, no blocking question — so the sponsor sees exactly what they can do next and
+picks when ready. Make the three paths obvious. Model it on the kit's style:
 
-> Your plan's saved and ready to download above. Whenever you like, you can put names
-> to the pooled roles or tweak the scope and assumptions — just say the word.
+> Your plan's saved and ready to download above. **Next steps — just say the word:**
+> **1) Edit** the scope or any assumption, **2) Share & activate** the plan when it's
+> ready (you can edit before *or* after activating), and **3) Assign the roles to
+> people** once it's active, so each owner can see their tasks.
 
 Then **end the turn.** Act on a follow-up **only when the sponsor replies asking for
 it** in a later turn:
 
 1. **Assign roles to people.** The plan ships with every task grounded to a **role**
-   but **pooled** — no named owners yet. If (and only if) the sponsor asks, run
-   Phase 4 (`src/skills/planner/assign.md`) / the roles attestation flow
-   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Otherwise the roles
-   stay pooled — that's a complete, valid state, not a gap to chase.
+   but **not yet assigned to a person** — no named owners yet. If (and only if) the
+   sponsor asks, run Phase 4 (`src/skills/planner/assign.md`) / the roles attestation
+   flow (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Otherwise the
+   roles stay unassigned — that's a complete, valid state, not a gap to chase.
 2. **Edit the plan / its assumptions.** The measure, acceptance bar, persona, and
    per-category detail were **assumed**, so they're trivial to change on request.
    When the sponsor asks for a change — scope (add/drop a scenario category, or trim
@@ -303,7 +394,7 @@ assigns roles or **edits** from there (the follow-ups above).
 
 - **ADK-satisfied:** every in-scope scenario maps to a grounded, supported
   capability; every prerequisite has a Task; and every Task is grounded to a role
-  (assigned to a person later, or pooled for now).
+  (assigned to a person later, or left open to the role for now).
 - **Sponsor-in-control:** the sponsor sees the full plan + the acceptance bar and
   can assign roles or change any assumption (scope, systems, measure, persona,
   fields) via a follow-up — acceptance is the edit loop, not a pre-build

@@ -2,10 +2,10 @@
 
 This skill assigns an ESS rollout **role** to a real person on the shared plan —
 "make Priya the ServiceNow admin", "assign the Workday admin role to Sam". It
-exists because a plan pools some work to a **role** (e.g. `ServiceNowAdmin`)
-rather than a named person, and that pooled work stays **invisible** to everyone
+exists because a plan assigns some work to a **role** (e.g. `ServiceNowAdmin`)
+rather than a named person, and that role work stays **invisible** to everyone
 until someone with authority **attests** that a specific person holds that role
-for the plan. Attesting flips the pooled tasks — and the plan itself — into view
+for the plan. Attesting flips the role's tasks — and the plan itself — into view
 for that person, so they can pick the work up (their "what am I assigned?" view
 then lists it).
 
@@ -75,7 +75,7 @@ auto-pick when the choice is ambiguous:
   → `EntraPowerPlatformAdministrator`). Only if the role genuinely isn't in that
   list do you explain it can't be attested and stop.
 - **Attesting changes visibility.** After you attest, the person sees the plan
-  and every task pooled to that role in their own "what am I assigned?" view, and
+  and every task assigned to that role in their own "what am I assigned?" view, and
   can claim them. That is the whole point — state it back to the maker in plain
   language when you confirm.
 
@@ -84,6 +84,7 @@ auto-pick when the choice is ambiguous:
 | Ask | Read |
 |-----|------|
 | "assign/give the `<role>` role to `<person>`", "make `<person>` the `<role>`" | `src/skills/roles/resolve-person.md` then `src/skills/roles/attest.md` |
+| "assign `<person>` as `<role>` **and** `<person2>` as `<role2>`" — several pairings at once | Loop `src/skills/roles/resolve-person.md` → `src/skills/roles/attest.md` per pair — see *Several assignments in one go* in `attest.md` |
 | "who holds `<role>` on this plan?", "list the role assignments" | `src/skills/roles/list.md` |
 | "remove/revoke `<person>`'s `<role>`" | `src/skills/roles/list.md` (find the assignment, then revoke) |
 | Nudge role assignment when a plan is created/published | `src/skills/roles/nudge.md` |
