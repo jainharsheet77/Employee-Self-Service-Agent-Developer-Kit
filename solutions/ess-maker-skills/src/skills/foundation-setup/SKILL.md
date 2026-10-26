@@ -126,7 +126,10 @@ Use the `vscode_askQuestions` tool:
 If `connect_ready` is true, inspect `.local/config.json`:
 
 - If its `setup` value is `"complete"`, show that foundation and workspace setup
-  are complete and direct the maker to `/connect`.
+  are complete, then read `src/skills/foundation-setup/handoff.md` →
+  **After workspace binding**. Use the existing plan/task context to refresh the
+  person's next action; do not automatically direct an assigned admin to `/connect`.
+  Do not repeat finalization or workspace extraction.
 - Otherwise read `src/skills/onboarding/foundation-bootstrap.md` and follow it.
   The bootstrap must reuse `environment.tenant_endpoint`, must not render
   another setup checklist, and must proceed directly to the installed-agent

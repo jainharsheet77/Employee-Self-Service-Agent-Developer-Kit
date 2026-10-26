@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from planner import cli
 from planner.plan_model import (
     Plan,
@@ -92,6 +94,75 @@ def test_first_run_setup_pending_is_the_fre_signal():
     # A Completed setup task is never the first-run nudge either.
     p.set_task_state("T1", "Completed")
     assert p.first_run_setup_pending("T1") is False
+
+
+@pytest.mark.parametrize(("overrides", "needs_binding"), [
+    ({}, False),
+    ({"setup": "incomplete"}, True),
+    ({"environmentId": "other-env"}, True),
+    ({"environmentId": None}, True),
+    ({"dataverseEndpoint": "https://other.crm.dynamics.com"}, True),
+    ({"dataverseEndpoint": " HTTPS://TEST.CRM.DYNAMICS.COM/ "}, False),
+    ({"agent": {"botId": "other-bot", "schemaName": "test_ess"}}, True),
+    ({"agent": {}}, True),
+    ({"agent": None}, True),
+    ({"agent": {"botId": "BOT-1", "schemaName": "renamed"}}, False),
+])
+def test_task_brief_checks_current_workspace_binding(overrides, needs_binding):
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment",
+        {"environmentId": "env-1", "environmentUrl": "https://test.crm.dynamics.com"},
+        produced_by_task_id="T1",
+    ))
+    plan.add_output(plan_artifact(
+        "essAgent", "Agent", {"botId": "bot-1", "schemaName": "test_ess"},
+        produced_by_task_id="T1",
+    ))
+    config = {
+        "setup": "complete", "environmentId": "env-1",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+        "agent": {"botId": "bot-1", "schemaName": "test_ess"},
+        **overrides,
+    }
+    brief = plan.task_brief("T2", workspace_config=config)
+    assert (brief["kitSetup"] is not None) is needs_binding
+    assert brief["blockedBy"] == {}
+    assert brief["state"] == "NotStarted"
+
+
+@pytest.mark.parametrize("state", ["Completed", "Blocked"])
+def test_ineligible_task_does_not_prompt_for_workspace_binding(state):
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="T1",
+    ))
+    if state == "Completed":
+        for key in plan.task("T2")["produces"]:
+            plan.add_output(plan_artifact(
+                key, "Custom", {"name": key}, produced_by_task_id="T2",
+            ))
+    plan.set_task_state("T2", state)
+    assert plan.task_brief("T2")["kitSetup"] is None
+
+
+def test_other_missing_inputs_do_not_trigger_workspace_binding():
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="T1",
+    ))
+    plan.update_task("T2", consumes=["primaryEnvironment", "tenantConfiguration"])
+    brief = plan.task_brief("T2")
+    assert brief["blockedBy"] == {"tenantConfiguration": []}
+    assert brief["kitSetup"] is None
+
+
+def test_blocked_setup_is_not_a_ready_first_run_task():
+    plan = _plan()
+    plan.set_task_state("T1", "Blocked")
+    assert plan.task_brief("T1")["firstRunSetup"] is False
 
 
 def _run(*argv: str) -> int:
@@ -481,3 +552,40 @@ def test_task_brief_blocked_when_consumed_not_produced(tmp_path, capsys):
     capsys.readouterr()
     _run("--plan", plan_path, "task-brief", "--task", "T2")
     assert "not produced yet" in capsys.readouterr().out
+
+
+def test_cli_task_brief_uses_workspace_binding_without_mutating_plan(tmp_path, capsys):
+    path, config_path = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment",
+        {"environmentId": "env", "environmentUrl": "https://test.crm.dynamics.com"},
+        produced_by_task_id="T1",
+    ))
+    plan.save_all(path)
+    config_path.write_text(json.dumps({
+        "setup": "complete", "environmentId": "env",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+    }), encoding="utf-8")
+    before = path.read_bytes()
+    assert _run("--plan", str(path), "task-brief", "--task", "T2", "--config", str(config_path)) == 0
+    output = capsys.readouterr().out
+    assert "Run /connect" in output
+    assert "First connect your kit" not in output
+    assert path.read_bytes() == before
+
+
+def test_cli_task_brief_missing_config_needs_binding_but_corrupt_config_fails(tmp_path, capsys):
+    path, config_path = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = _plan()
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="T1",
+    ))
+    plan.save_all(path)
+    args = ["--plan", str(path), "task-brief", "--task", "T2", "--config", str(config_path), "--json"]
+    assert _run(*args) == 0
+    assert json.loads(capsys.readouterr().out)["kitSetup"]["environmentId"] == "env"
+    config_path.write_text("{broken", encoding="utf-8")
+    assert _run(*args) == 1
+    assert "invalid JSON" in capsys.readouterr().err

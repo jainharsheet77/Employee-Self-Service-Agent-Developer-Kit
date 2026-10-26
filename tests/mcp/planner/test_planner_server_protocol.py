@@ -296,6 +296,39 @@ def test_tool_annotations_reflect_read_mutate_delete_effect() -> None:
         assert annotations.idempotentHint is idempotent, name
 
 
+def test_plan_creation_guidance_infers_and_confirms_experience_from_scenarios() -> None:
+    description = " ".join(_tools()["create_project_plan"].description.split())
+    assert "Infer the target from the requested scenarios" in description
+    assert "confirm it with the draft plan" in description
+    assert "not an up-front experience selector" in description
+    assert "HR vs IT is the only choice" not in description
+
+
+def test_status_tool_guidance_distinguishes_team_overview_from_personal_next_step() -> None:
+    tools = _tools()
+    overview = " ".join(tools["list_project_plan_tasks"].description.split())
+    personal = " ".join(tools["list_project_plan_tasks_for_caller"].description.split())
+    assert "team overview, not the caller's assignments" in overview
+    assert "list_project_plan_tasks_for_caller" in overview
+    assert "personal next step in a status response" in personal
+    assert "does not make them ready to execute" in personal
+    assert "plan lifecycle" in personal
+    assert "dependencies" in personal
+    assert "shared draft is read-only" in personal
+
+
+def test_status_requests_do_not_authorize_activation() -> None:
+    description = " ".join(_tools()["update_project_plan"].description.split())
+    assert "explicit activation request" in description
+    assert "a status question is not consent" in description
+
+
+def test_caller_task_guidance_requires_refresh_after_progress() -> None:
+    description = " ".join(_tools()["list_project_plan_tasks_for_caller"].description.split())
+    assert "Query again after completion or reassignment" in description
+    assert "do not reuse an earlier task list" in description
+
+
 # ---------------------------------------------------------------------------
 # Invocation wiring
 # ---------------------------------------------------------------------------

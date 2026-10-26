@@ -69,6 +69,19 @@ Wait for the user to respond.
 
 Update `workspace/onboarding/steps.md` — change step 4 from `- [ ]` to `- [x]`.
 
+For an assigned plan task, return to that
+task with the verified environment ID/URL and agent identity. Remember:
+workspace binding alone does not complete the assigned task. If this only
+connected the workspace for another task, resume that task's brief instead of
+claiming its work is done. If this finishes the foundation task itself, follow
+`src/skills/foundation-setup/handoff.md` → **After workspace binding** for
+one capture/readback and a refreshed personal next action.
+Do not show the generic command menu below for either planned path.
+
+If FOUNDATION_REUSED is true without an assigned task, return to that same
+handoff section so it can use any plan for this rollout. Do not rerun foundation
+setup. Only standalone onboarding without that context shows this menu:
+
 **Message:**
 
 ✅ Core setup complete!
@@ -85,7 +98,4 @@ You can now customize your agent or connect an integration.
 
 **End message.**
 
-Onboarding is complete. If this was an assigned plan-task handoff, return to that
-task with the verified environment ID/URL and agent identity; use Planner capture
-to confirm and save the outputs. Do not start a fresh interview. Otherwise return to
-`src/skills/foundation-setup/SKILL.md` so it can show the completed handoff.
+Onboarding is complete. Do not start a fresh interview.

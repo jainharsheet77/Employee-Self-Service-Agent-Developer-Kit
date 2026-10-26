@@ -1082,7 +1082,41 @@ class Plan:
                 return t["id"]
         return candidates[0]["id"]
 
-    def kit_setup_nudge(self, task_id: str) -> dict[str, Any] | None:
+    def _workspace_matches_plan(
+        self, environment: dict[str, Any], config: dict[str, Any] | None,
+    ) -> bool:
+        if not config or config.get("setup") != "complete":
+            return False
+        bindings = [
+            ("environmentId", environment.get("environmentId"), config.get("environmentId")),
+            ("dataverseEndpoint", environment.get("environmentUrl"), config.get("dataverseEndpoint")),
+        ]
+        if not any(expected for _, expected, _ in bindings):
+            return False
+        agent = self.output("essAgent") or self.output("deployedEssAgent")
+        if agent:
+            attributes = agent.get("attributes") or {}
+            key = next((key for key in ("botId", "schemaName") if attributes.get(key)), None)
+            if key:
+                local_agent = config.get("agent")
+                if not isinstance(local_agent, dict):
+                    return False
+                bindings.append((key, attributes[key], local_agent.get(key)))
+        for key, expected, actual in bindings:
+            if not expected:
+                continue
+            if not isinstance(expected, str) or not isinstance(actual, str):
+                return False
+            expected, actual = expected.strip().casefold(), actual.strip().casefold()
+            if key == "dataverseEndpoint":
+                expected, actual = expected.rstrip("/"), actual.rstrip("/")
+            if not expected or expected != actual:
+                return False
+        return True
+
+    def kit_setup_nudge(
+        self, task_id: str, *, workspace_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         """Whether this task's assignee should run ``/setup`` to connect their own
         kit to the plan's environment before starting.
 
@@ -1096,11 +1130,15 @@ class Plan:
           `primaryEnvironment` (needs the env), does **not** produce it, and the
           plan already has an environment pinned — nudge this persona to run
           ``/setup`` and connect to that env.
-        - Returns ``None`` for the setup task itself (it produces the env), for
-          tasks that don't need the env, or when the environment is absent or
-          still awaiting shared confirmation.
+        - Returns ``None`` for completed/blocked work, unmet dependencies, the
+          setup task itself, or tasks that don't need the environment.
+        - When workspace config confirms setup complete for the same environment
+          and recorded agent identity, no binding nudge is needed. Without that
+          local evidence, the plan's shared environment alone is not enough.
         """
         task = self._require_task(task_id)
+        if task.get("state") not in ("NotStarted", "InProgress"):
+            return None
         produces = task.get("produces") or []
         consumes = task.get("consumes") or []
         if PRIMARY_ENVIRONMENT_KEY in produces:
@@ -1108,9 +1146,11 @@ class Plan:
         if PRIMARY_ENVIRONMENT_KEY not in consumes:
             return None  # doesn't need the connected environment
         env = self.output(PRIMARY_ENVIRONMENT_KEY)
-        if not env or self._input_awaits_sync(PRIMARY_ENVIRONMENT_KEY):
+        if not env or self.blocking_inputs(task_id):
             return None
         attrs = env.get("attributes", {})
+        if self._workspace_matches_plan(attrs, workspace_config):
+            return None
         return {
             "environmentId": attrs.get("environmentId", ""),
             "environmentUrl": attrs.get("environmentUrl", ""),
@@ -1137,7 +1177,7 @@ class Plan:
         task = self._require_task(task_id)
         if not {PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment"}.intersection(task.get("produces") or []):
             return False
-        if task.get("state") == "Completed":
+        if task.get("state") not in ("NotStarted", "InProgress"):
             return False
         return (
             self.output(PRIMARY_ENVIRONMENT_KEY) is None
@@ -1145,7 +1185,9 @@ class Plan:
             and not self.blocking_inputs(task_id)
         )
 
-    def task_brief(self, task_id: str) -> dict[str, Any]:
+    def task_brief(
+        self, task_id: str, *, workspace_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """A briefing for a task's assignee: what to do (title + description), the
         role, the resolved values it consumes (e.g. the env id to use), and the
         keys to capture when done."""
@@ -1158,7 +1200,7 @@ class Plan:
             "assignee": assignee_user_oid(task.get("assignedTo")),
             "state": task.get("state", ""),
             "firstRunSetup": self.first_run_setup_pending(task_id),
-            "kitSetup": self.kit_setup_nudge(task_id),
+            "kitSetup": self.kit_setup_nudge(task_id, workspace_config=workspace_config),
             "consumes": self.resolved_consumes(task_id),
             "blockedBy": self.blocking_inputs(task_id),
             "blockingReason": self.blocking_reason(task_id),

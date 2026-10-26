@@ -19,7 +19,8 @@ plan first; acknowledge already-clear choices instead of reconfirming them.
 For example, "Plan ESS HR with Workday profile updates" already supplies HR, a
 scenario, and its system. Set `set-agent-name --name EmployeeSelfServiceHRDA`
 without asking HR or IT again. Use `EmployeeSelfServiceITDA` for an explicit IT
-target; ask only if the target agent really is ambiguous.
+target. If the maker names only scenarios, infer the experience from them using
+the policy below; do not insert an experience-selection question before Q1 or Q2.
 
 Before Q1, give the short plan definition and journey in `SKILL.md`. For every
 offered choice, explain the employee outcome, what it needs, and what work it
@@ -59,6 +60,60 @@ doesn't define, and don't force‑fit a goal that matches no ESS category (say s
 Per‑scenario detail (fields, setup, connectors, roles) is fetched from Microsoft
 Learn at render time, never from the catalogue.
 
+## Infer the experience from the scenarios
+
+The experience is derived from the employee outcomes, **not a fourth interview
+question**. Preserve an explicit or saved target without reconfirming it on every
+resume or refinement. When no target is known, map the captured scenarios to the
+catalogue's **Domain**, then infer the supported experience:
+
+| Captured scenario evidence | Inferred experience for a new plan |
+|---|---|
+| HR knowledge, employee profile read/write, HR cases, or manager scenarios | **ESS HR** (`EmployeeSelfServiceHRDA`) |
+| IT knowledge, troubleshooting (including M365), or IT tickets | **ESS IT** (`EmployeeSelfServiceITDA`) |
+
+Do not infer from a connector alone: SharePoint and ServiceNow can support more
+than one domain. Use the requested jobs and their catalogue categories, not the
+first system mentioned. Unknown systems do not delay inferring an otherwise-clear
+HR or IT experience. There is no declarative-vs-custom-engine interview.
+
+Record a clear inferred target with `set-agent-name` while creating the local
+draft. Treat the inference as a **proposed** target until the maker confirms it
+with the scope; do not claim they explicitly chose it. Put the rationale and
+confirmation in the same readback that presents the draft, **not a separate
+approval turn** or an experience-picker form. For example:
+
+> This looks like an ESS HR rollout because you want profile updates and HR case
+> tracking. I've drafted the ESS HR plan below; please confirm that target along
+> with the scope, or tell me what to change.
+
+> This looks like an ESS IT rollout because you want IT troubleshooting and ticket
+> tracking. I've drafted the ESS IT plan below; please confirm that target along
+> with the scope, or tell me what to change.
+
+If the maker already named the experience, simply acknowledge it in the readback;
+no additional confirmation is needed. Correct an inferred local-draft target
+when asked and refine the affected tasks/evals without restarting the interview.
+Do not silently retarget a shared plan when new scenarios conflict with its
+existing target; surface that conflict during plan review.
+
+For **mixed HR/IT**, generic knowledge/handoff with no domain, or another domain
+such as **Facilities** without a supported target, do not pick by majority, choose
+the first domain, invent an agent name, or force the request into HR. Keep all
+requested scenarios visible and save the specific uncertainty:
+
+```text
+python scripts/planner/cli.py set-context --key experience --group pendingDecision --value "<target or primary scope to confirm during plan review>" --source Agent
+```
+
+Continue creating a local draft without a target; clarify the actual scope with
+that draft, not through an up-front "Which ESS experience?" question. A shared plan
+requires one supported `configuringAgentName`, so sharing waits for this decision,
+not local planning. Do not split into multiple shared plans without approval.
+Once resolved, persist the target with `set-agent-name` and, if present, clear the
+pending entry with `remove-context --key experience`. Do not clear unrelated
+pending system or owner decisions.
+
 ## The question bank — scenarios *before* systems
 
 Capture in this order. **Build the scenario context first** — the jobs the team
@@ -70,7 +125,7 @@ ticketing) they may have wanted.
 | # | Ask | Store as |
 |---|-----|----------|
 | 1 | **Goal + success, together.** "In one sentence — what should this agent do, and for whom? And what does success look like — fewer support tickets, faster policy answers, or something else?" (The success half seeds the default success measure below — you won't ask for it separately.) | `set-context --group objective` |
-| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "Which 2–3 things do employees ask about most?" (e.g. *"How many vacation days do I have?"*, *"Reset my password"*, *"Update my phone number"*) — then widen: "Which scenarios are you thinking about beyond that?" To prioritise, offer a starting point: "Pick a focus — HR or IT — and expand from there. Where do employees feel the most friction today?" Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
+| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "Which 2–3 things do employees ask about most?" (e.g. *"How many vacation days do I have?"*, *"Reset my password"*, *"Update my phone number"*) — then widen: "Which scenarios are you thinking about beyond that?" To prioritise, ask which employee outcomes cause the most friction; do not require an HR-vs-IT choice. Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
 | 3 | **System per scenario — only after scenarios are captured.** "For **{scenario/area}**, which system holds the data?" — ground the options in the ESS native integrations from Phase‑1 research (Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors); SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
 
 That is the whole interview before you build. **Don't ask a fourth kind of
@@ -380,13 +435,25 @@ locally (the download link **then** the grouped task checklist — `SKILL.md` �
 
 Instead, close with an explicit, scannable **Next steps** readout — plain language,
 no form, no blocking question — so the sponsor sees exactly what they can do next and
-picks when ready. Make the three paths obvious. Model it on the kit's style:
+picks when ready. Show Share and Activate as separate steps. Explain what each
+does and give a copyable natural-language prompt; displaying an example is not
+permission to perform it. Use this readout:
 
-> Your plan's saved locally and ready to download above. **Next steps — just say the
-> word:** **1) Edit** the scope or any assumption, **2) Share** it to save it to the
-> shared space and **activate** it when it's ready (editing is easiest *before* you
-> share), and **3) Assign the roles to people** once it's active, so each owner can
-> see their tasks.
+> Your plan is saved locally and ready to download above.
+>
+> **Next steps**
+>
+> 1. **Edit the plan.** Refine the proposed target, scope, sensitive fields, or
+>    success target before sharing.
+> 2. **Share the plan.** Save it to the shared space as a **shared draft** so
+>    colleagues with access can review it. Tasks remain read-only until activation.
+>    **Prompt:** "Share this plan."
+> 3. **Activate the plan.** Make the shared draft the **active rollout plan** so
+>    owners can start ready tasks and record progress. This does not run tasks or
+>    deploy ESS automatically.
+>    **Prompt:** "Activate this plan."
+> 4. **Assign people to roles.** Once the plan is active, name the people
+>    responsible for each role so they can see their tasks.
 
 Then **end the turn.** Act on a follow-up **only when the sponsor replies asking for
 it** in a later turn:

@@ -12,6 +12,31 @@ from planner import cli, sync
 from planner.plan_model import Plan, new_task, plan_artifact, principal_pool
 
 
+@pytest.mark.parametrize(("objective", "scenario", "target"), [
+    ("Update employee profiles", "hr-profile-write", "EmployeeSelfServiceHRDA"),
+    ("Create and track IT tickets", "it-ticketing", "EmployeeSelfServiceITDA"),
+])
+def test_scenario_first_draft_accepts_target_during_plan_review(tmp_path, capsys, objective, scenario, target):
+    path = tmp_path / "plan.json"
+    args = ["--plan", str(path)]
+    assert cli.main([*args, "init", "--objective", objective]) == 0
+    assert cli.main([*args, "add-scenario", "--id", scenario, "--label", objective]) == 0
+    assert cli.main([*args, "add-system", "--area", scenario, "--pending"]) == 0
+    draft = Plan.load(path)
+    assert draft.configuring_agent_name == ""
+    assert draft.missing_slots()["required"] == []
+    assert cli.main([*args, "summary"]) == 0
+    assert cli.main([*args, "set-agent-name", "--name", target]) == 0
+    capsys.readouterr()
+    assert cli.main([*args, "export-remote-plan"]) == 0
+    exported = json.loads(capsys.readouterr().out)
+    assert exported["configuringAgentName"] == target
+    assert any(
+        entry["key"] == f"system.{scenario}" and entry["group"] == "pendingDecision"
+        for entry in exported["context"]
+    )
+
+
 def test_unknown_system_can_be_saved_shared_resumed_and_resolved(tmp_path):
     path = tmp_path / "plan.json"
     plan = Plan.new(objective="Let employees update their HR profile")
@@ -203,6 +228,113 @@ def test_retrospective_setup_capture_keeps_offline_evidence_while_sync_is_pendin
     assert saved.output("essAgent")["producedByTaskId"] == "install"
 
 
+def test_setup_progression_refreshes_own_work_after_shared_confirmation(tmp_path, capsys):
+    path, config_path = tmp_path / "plan.json", tmp_path / "config.json"
+    role = "EntraPowerPlatformAdministrator"
+    plan = Plan.new()
+    plan.set_remote_identity(project_id="project", plan_id="plan")
+    plan.data["status"] = "Active"
+    plan.add_task(new_task(
+        "setup", "Prepare environment", assigned_to=principal_pool(role),
+        produces=["primaryEnvironment"],
+    ))
+    plan.add_task(new_task(
+        "install", "Install ESS", assigned_to=principal_pool(role),
+        consumes=["primaryEnvironment"], produces=["essAgent"],
+    ))
+    plan.add_task(new_task(
+        "review", "Review rollout owners' environment access", assigned_to=principal_pool(role),
+        consumes=["primaryEnvironment", "essAgent"],
+    ))
+    plan.add_task(new_task(
+        "topic", "Create an HR topic", assigned_to=principal_pool("PowerPlatformEnvironmentMaker"),
+        consumes=["primaryEnvironment", "essAgent"],
+    ))
+    plan.save_all(path)
+    stale = copy.deepcopy(plan.data)
+    assert [item["task"]["id"] for item in plan.tasks_for_person("admin", [role])[role]] == [
+        "setup", "install", "review",
+    ]
+    config_path.write_text(json.dumps({
+        "setup": "complete", "environmentId": "env",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+        "agent": {"botId": "bot", "schemaName": "test_ess"},
+    }), encoding="utf-8")
+    assert cli.main([
+        "--plan", str(path), "capture-setup", "--config", str(config_path), "--complete",
+    ]) == 0
+    saved = Plan.load(path)
+    merged = Plan(sync.preserve_local_pending(stale, saved.data))
+    own = merged.tasks_for_person("admin", [role])[role]
+    assert [item["task"]["id"] for item in own] == ["review"]
+    assert set(own[0]["waitingOn"]) == {"setup", "install"}
+    assert "shared confirmation" in merged.task_brief("review")["blockingReason"]
+
+    confirmed = copy.deepcopy(saved.data)
+    for task in confirmed["tasks"]:
+        task.pop("pendingSync", None)
+    refreshed = Plan(sync.preserve_local_pending(confirmed, saved.data))
+    refreshed.save_all(path)
+    capsys.readouterr()
+    assert cli.main([
+        "--plan", str(path), "mine", "--person", "admin", "--roles", role, "--json",
+    ]) == 0
+    own = json.loads(capsys.readouterr().out)[role]
+    assert [item["task"]["id"] for item in own] == ["review"]
+    assert own[0]["waitingOn"] == []
+    assert cli.main([
+        "--plan", str(path), "task-brief", "--task", "review",
+        "--config", str(config_path), "--json",
+    ]) == 0
+    brief = json.loads(capsys.readouterr().out)
+    assert brief["firstRunSetup"] is False
+    assert brief["kitSetup"] is None
+
+    refreshed.assign_task("review", role_id=role, person_oid="another-admin")
+    assert refreshed.tasks_for_person("admin", [role]) == {}
+    assert refreshed.tasks_for_person("another-admin", [role])[role][0]["task"]["id"] == "review"
+    refreshed.set_task_state("review", "Completed")
+    assert refreshed.tasks_for_person("another-admin", [role]) == {}
+    assert refreshed.task("topic")["state"] == "NotStarted"
+
+
+def test_partial_setup_progression_keeps_only_unfinished_work_open(tmp_path):
+    path, config_path = tmp_path / "plan.json", tmp_path / "config.json"
+    role = "EntraPowerPlatformAdministrator"
+    plan = Plan.new()
+    plan.add_task(new_task(
+        "setup", "Set up environment and ESS", assigned_to=principal_pool(role),
+        produces=["primaryEnvironment", "essAgent"],
+    ))
+    plan.add_task(new_task(
+        "review", "Review environment access", assigned_to=principal_pool(role),
+        consumes=["primaryEnvironment", "essAgent"],
+    ))
+    plan.add_output(plan_artifact(
+        "primaryEnvironment", "Environment", {"environmentId": "env"},
+        produced_by_task_id="setup",
+    ))
+    plan.set_task_state("setup", "InProgress")
+    plan.save_all(path)
+    own = plan.tasks_for_person("admin", [role])[role]
+    assert own[0]["task"]["state"] == "InProgress"
+    assert own[1]["waitingOn"] == ["setup"]
+    assert plan.task_brief("setup")["firstRunSetup"] is False
+    assert plan.task_brief("review")["kitSetup"] is None
+
+    config_path.write_text(json.dumps({
+        "setup": "complete", "environmentId": "env",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+        "agent": {"botId": "bot", "schemaName": "test_ess"},
+    }), encoding="utf-8")
+    assert cli.main([
+        "--plan", str(path), "capture-setup", "--config", str(config_path), "--complete",
+    ]) == 0
+    refreshed = Plan.load(path)
+    own = refreshed.tasks_for_person("admin", [role])[role]
+    assert [item["task"]["id"] for item in own] == ["review"]
+    assert own[0]["waitingOn"] == []
+    assert refreshed.task_brief("review", workspace_config=json.loads(config_path.read_text()))["kitSetup"] is None
 def test_sync_queue_orders_upstream_metadata_before_dependent_completions():
     plan = Plan.new()
     plan.set_remote_identity(project_id="project", plan_id="plan")

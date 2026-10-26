@@ -158,15 +158,14 @@ been shared, later changes sync automatically (see *Ongoing edits* below).
 When the sponsor asks to share the plan you built locally (research → interview →
 model), store it in **one** create call rather than task-by-task:
 
-1. **Reuse the captured HR/IT target; ask only if genuinely unknown.**
-   The create body's `configuringAgentName` is required. The ESS agent ships as
-   a **declarative agent (DA)** — that's what merges to `main` — so there is **no
-   DA-vs-custom-engine choice to make**; every plan targets the DA. The only axis
-   the sponsor still picks is **HR vs IT**:
-   - `EmployeeSelfServiceHRDA` — HR
-   - `EmployeeSelfServiceITDA` — IT
-   HR-vs-IT already stated in the request, interview, or saved plan is sufficient.
-   Acknowledge it instead of asking again. If it has not been persisted, set it:
+1. **Reuse the scenario-inferred target confirmed with the draft**, or the
+   maker's explicit/saved target. Do not reopen an HR/IT selector at sharing.
+   `configuringAgentName` is required for this shared create, **not** for local
+   drafting. If it is missing, infer it from the already-captured scenarios using
+   `interview.md` and confirm it with the draft's scope, without restarting the
+   interview. Unknown systems do not prevent that inference. Mixed or unclear
+   experience stays pending until resolved; keep the local draft rather than
+   inventing a target to satisfy the API. Persist the resolved target if needed:
    `python scripts/planner/cli.py set-agent-name --name <AgentName>`
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
@@ -199,8 +198,11 @@ model), store it in **one** create call rather than task-by-task:
    the backend) and re-surface the downloadable *ESS scenario plan* link if helpful
    (the `summary` command prints the exact `📄 [ESS-scenario-plan.md](…)` line). A
    Draft's tasks are **read-only** until it's Active, so name the next step:
-   - **Activate now** — the plan is ready to run; go to step 6. Activation makes
-     the assigned work real and visible. From then on, put people on the
+   - **Activate the plan** — make this the active rollout plan so owners can start
+     ready tasks and record progress. This does not run tasks or deploy ESS
+     automatically. **Prompt:** "Activate this plan." Go to step 6 only when the
+     sponsor asks to activate, not merely because this option was displayed.
+     From then on, put people on the
      roles (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`), hand
      tasks to named owners (`src/skills/planner/assign.md`), and capture outputs —
      all through the task tools against the **Active** plan.
@@ -229,16 +231,19 @@ model), store it in **one** create call rather than task-by-task:
    Pending system/owner decisions do not globally block activation: identify
    the tasks that must wait, while unrelated ready work can proceed.
 
-   **Then make role assignment the explicit next step.** The instant the plan is
-   Active, the headline next action is **assigning the roles to people** so each
-   owner can see their tasks — say so plainly and offer to do it right now
-   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Editing still
+   **Then refresh the maker's next step.** Use `status.md` → **Refresh after progress**.
+   If required roles for unfinished work are still vacant, recommend assigning
+   them (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Do not
+   recommend activation again or ask them to repeat assignments already recorded.
+   Otherwise choose the relevant coordination action or their own eligible task.
+   Editing still
    works after activation, but those edits now reach **both** the local plan **and**
    the shared service — route them through the task tools (*Ongoing edits* below),
    not the local cache alone.
 
-If `export-remote-plan` errors that the configuring agent name is required, you
-skipped step 1 — set it, then re-export.
+If `export-remote-plan` reports a missing configuring agent name, return to the
+scenario-inference and draft-review step above, not an up-front experience
+question. Keep planning locally if the target is still unresolved.
 
 ## Ongoing edits — keep the service authoritative
 
@@ -277,9 +282,19 @@ After a batch of edits, re-pull (`get_project_plan` + `list_project_plan_tasks` 
 ## Flow 2 — "what am I assigned?" is answered by the service
 
 The service stores the role→person mapping and scopes tasks to the caller
-itself. So for "what are my tasks?", make **one** call —
+itself. Use this same caller-scoped view for a personal execution next step in a
+status or resume response; the project-wide task list is only team context.
+Apply the requester and lifecycle policy in `status.md` first: a shared Draft
+remains read-only, and returned tasks still need a readiness check with
+`task-brief`. Do not call this flow without a shared plan ID. An empty result
+means no open tasks were returned, not that the caller has no deployment role.
+
+For "what are my tasks?", make **one** call —
 **`list_project_plan_tasks_for_caller`** with just `projectId` and `planId` — and
-present exactly what it returns. The caller's identity comes from the signed-in
+keep that assignment scope. Refresh it after progress, not from an earlier result.
+If the local ledger preserves a completed task as `pendingSync`, label it as
+awaiting shared confirmation rather than recommending it again, even if the
+service list is stale. The caller's identity comes from the signed-in
 token, so:
 
 - **Pass no identity, and don't go looking for one.** Never pass, resolve, or
@@ -295,7 +310,7 @@ token, so:
   plain language ("you hold the Power Platform admin role") — **never ask "which
   role(s) do you hold?"**.
 - **Call out a first-run setup plainly.** If what comes back includes the caller's
-  **setup task** (the one that stands up the environment) still open and no
+  **setup task** (the one that stands up the environment) ready to execute and no
   environment is on the plan yet, that is their first step — they can stand up the
   environment **either manually in Copilot Studio or by running `/setup`**, and
   **`/setup` is the recommended, guided path**, so point them there **now** (their

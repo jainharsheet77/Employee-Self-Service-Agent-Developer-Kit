@@ -218,8 +218,12 @@ async def create_project_plan(
     """Create a plan in a project. Body: configuringAgentName is REQUIRED — the
     ESS agent this plan configures. The ESS agent ships as a declarative agent
     (DA), which is what merges to main, so name one of EmployeeSelfServiceHRDA or
-    EmployeeSelfServiceITDA (HR vs IT is the only choice; there is no DA-vs-custom-
-    engine option). Then optional ownedById?, acceptanceCriteria?, context?, and
+    EmployeeSelfServiceITDA. Infer the target from the requested scenarios and
+    confirm it with the draft plan, preserving an explicit or saved target;
+    this is not an up-front experience selector or a DA-vs-custom-engine choice.
+    The target is required for this shared create, not for local drafting.
+    Wait for explicit sharing consent and a resolved target before calling.
+    Then optional ownedById?, acceptanceCriteria?, context?, and
     tasks? (inline tasks are created atomically with the plan, max 50). Unknown
     fields are rejected (400). New plans start in Draft."""
     return _format(
@@ -240,7 +244,9 @@ async def update_project_plan(
     {"acceptanceCriteria": [...]}, or {"context": [...]}. Send a lifecycle field
     (status or ownedById) on its own — it cannot be combined with the other
     lifecycle field or with an acceptanceCriteria/context edit in one PATCH.
-    Only the plan owner may change status. Requires the plan's current ETag; if
+    Only the plan owner may change status. Activation requires an explicit
+    activation request; a status question is not consent.
+    Requires the plan's current ETag; if
     it is stale the call fails with an actionable 412 telling you to re-read the
     plan and reapply your change (the write is never silently replayed)."""
     return _format(
@@ -261,7 +267,9 @@ async def list_project_plan_tasks(
     planId: str,
     query: Optional[dict[str, Any]] = None,
 ) -> str:
-    """List the tasks in a plan."""
+    """List the tasks in a plan for a team overview, not the caller's assignments.
+    For a personal execution next step, use list_project_plan_tasks_for_caller
+    rather than treating any ready task in this list as the caller's work."""
     return _format(
         await get_client().list_project_plan_tasks(projectId, planId, query)
     )
@@ -282,7 +290,13 @@ async def list_project_plan_tasks_for_caller(
     (assignedToId eq '<caller>') — the service needs it to run the role
     expansion — and always excludes Completed tasks (state ne 'Completed').
     Any query.filter you pass is ANDed on as a residual that narrows further;
-    it cannot drop the marker or surface Completed work."""
+    it cannot drop the marker or surface Completed work.
+    Use this view for a personal next step in a status response. Returning tasks
+    does not make them ready to execute: check the plan lifecycle, task state,
+    and dependencies first; a shared draft is read-only. An empty result is not
+    proof that the caller has no role, and never permits substituting another
+    person's ready work. Query again after completion or reassignment before
+    recommending the next task; do not reuse an earlier task list."""
     return _format(
         await get_client().list_project_plan_tasks_for_caller(
             projectId, planId, query

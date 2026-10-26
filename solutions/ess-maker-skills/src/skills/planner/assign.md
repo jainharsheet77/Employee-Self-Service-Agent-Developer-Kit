@@ -51,6 +51,11 @@ role they want to name:
 The person is stored *acting as* the role — both facts are kept, so the Task
 still shows up under that role in Flow 2, and provenance survives.
 
+After an explicit person/role assignment is confirmed, follow `status.md` →
+**Refresh after progress**. Update the maker's next action from the remaining
+vacancies, blockers, and their own work; do not offer the assignment just
+completed again or start the colleague's task on the maker's behalf.
+
 ## The soft assumption
 
 For the MVP, the sponsor often also holds Power Platform admin access, so they

@@ -405,6 +405,24 @@ def test_foundation_handoff_routes_directly_to_agent_inventory() -> None:
     assert "| # | Task | Status |" not in extraction
 
 
+def test_planned_setup_completion_refreshes_the_callers_next_action() -> None:
+    handoff = (
+        _SOLUTION / "src" / "skills" / "foundation-setup" / "handoff.md"
+    ).read_text(encoding="utf-8")
+    assert "## After workspace binding" in handoff
+    assert "src/skills/planner/capture.md" in handoff
+    assert "src/skills/planner/status.md" in handoff
+    assert "Do not default to `/connect`" in handoff
+    assert "Without a plan task" in handoff
+    assert "only once" in handoff
+    router = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    assert "After workspace binding" in router
+    assert "do not automatically direct an assigned admin to `/connect`" in router
+    extraction = _ONBOARDING_STEP2.read_text(encoding="utf-8")
+    assert extraction.index("For an assigned plan task") < extraction.index("You can now customize")
+    assert "workspace binding alone does not complete the assigned task" in " ".join(extraction.split())
+
+
 def test_onboarding_does_not_offer_legacy_optional_readiness_check() -> None:
     router = _ONBOARDING.read_text(encoding="utf-8")
     normalized_router = " ".join(router.split())

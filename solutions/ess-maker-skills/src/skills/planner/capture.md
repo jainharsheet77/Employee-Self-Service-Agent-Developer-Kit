@@ -22,8 +22,9 @@ python scripts/planner/cli.py capture-setup --complete
 
 `--task` is optional — with it omitted the CLI **auto-detects the plan's setup
 task** (the task that produces `primaryEnvironment`) and completes it. **You (the
-planner) run this after `/setup` returns** — the unchanged setup/onboarding flow
-does not call it, so confirm the detected values with the assignee and invoke
+planner) run this after `/setup` returns** — the setup/onboarding handoff returns
+control here; `setup.py` itself does not update the plan. Confirm the detected
+values with the assignee and invoke
 `capture-setup` yourself (use `--dry-run` first to preview, then re-run to pin).
 
 This reads the current `.local/config.json` and prints **every** artifact it will
@@ -226,16 +227,18 @@ its pending status remains visible until reconciliation.
 So the Workday assignee is told "use env `<id>`, run `/connect`, then we'll pin
 the connection" — no re-discovery.
 
-**Every non-setup persona connects their own kit first.** The environment id is a
+**Check this person's workspace, not just their role.** The environment id is a
 *plan* fact once the Power Platform admin's `/setup` pins `primaryEnvironment`,
 but each assignee's own kit still has to connect to that same environment before
-their task's skill will work. `task-brief` handles the nudge: for a kit-skill task
-that isn't setup, once the plan has an environment pinned it prints **"First
+their task's skill will work. `task-brief` reads the current workspace config and
+suppresses the nudge when setup is complete for the plan's environment and recorded
+agent. Do not repeat `/setup` for the admin who just completed that binding.
+For a ready task that needs the environment and an unbound workspace, it prints **"First
 connect your kit: run /setup and choose environment `<envId>`"**. So the
 Workday / topics / eval assignee is nudged to `/setup` into the *plan's*
-environment — never to pick or create a different one. If the plan has **no**
-environment pinned yet, the admin's setup task hasn't run — that task is the
-prerequisite, so don't nudge others to setup; tell them it's blocked on setup.
+environment — never to pick or create a different one. If a required environment
+is missing or unconfirmed, name that blocker instead. Work that does not consume
+an environment does not gain an extra setup prerequisite.
 
 ## Downstream reads it off the Plan
 
@@ -252,8 +255,10 @@ they read the `environmentId` from the summary/plan rather than hunting for it.
   shared plan* above; don't leave a completion sitting `pendingSync`.
 - Completing a Task whose `produces` keys are now pinned can unblock downstream
   Tasks that `consume` them — point that out to the sponsor.
-- Show `python scripts/planner/cli.py summary` so "where are we" is answerable
-  at a glance.
+- After capture and any shared readback, follow `status.md` →
+  **Refresh after progress**. Refresh the same caller's remaining work and brief its next action;
+  do not stop at a completion checkmark or reuse the pre-action recommendation.
+  If confirmation is still pending, show that without repeating the finished work.
 - When topic outputs become available during the selected build task, continue
   the in-flow evaluation generation in `evaluate.md`. Preserve its review/push
   gates; do not tell the maker to discover and invoke a separate eval command.

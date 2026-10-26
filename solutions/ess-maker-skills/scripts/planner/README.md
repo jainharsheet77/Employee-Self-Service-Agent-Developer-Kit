@@ -20,6 +20,15 @@ pure logic.
 | `cli.py` | The command surface the skill invokes (`init`, `ingest-upload`, `gaps`, `set-context`, `add-system`, `add-scenario`, `add-scenario-dependency`, `check-deps`, `add-task`, `update-task`, `remove-task`, `assign`, `claim`, `set-state`, `task-brief`, `capture-setup`, `capture-discover`, `pin-output`, `mine`, `research`, `summary`, `validate`). `ingest-upload` builds a whole plan from a maker-authored uploaded plan (normalized JSON) in one atomic write and reports the remaining gaps; `gaps` lists the intent slots a plan still lacks. `capture-discover` summarizes a `/discover` run onto the plan's tenant-inventory task. |
 | `review.py` | CSV export and read-only review proposals with stable task IDs, version checks, and spreadsheet-formula escaping. No imported review applies edits automatically. |
 
+## Scenario-derived experience
+
+The skill infers ESS HR or ESS IT from the requested scenarios and confirms the
+proposed target with the draft plan, rather than opening with an experience picker.
+An explicit or saved target is reused. Mixed/unclear scope is recorded as an
+`experience` pending decision without blocking local drafting. The existing
+`configuringAgentName` requirement applies when exporting for shared creation;
+the skill must resolve it through scenario-based plan review, not guess a value.
+
 ## Pending decisions and execution readiness
 
 An unknown system is a saved decision, not an invented system or a global
@@ -47,6 +56,28 @@ order while keeping independent preparation parallel.
 `setup-status` distinguishes an environment from an installed agent
 (`environmentPinned` and `agentPinned`). `firstRunSetupTaskId` identifies a ready
 provisioning task without changing the workspace-capture `setupTaskId`.
+
+## Progress-aware next actions
+
+After a task run or a plan/assignment change, Planner refreshes the same person's
+next action from current state rather than retaining a previous recommendation.
+Completed work disappears from `mine`; pending shared confirmation still blocks
+dependent execution, and another role's newly ready task is not assigned to the
+caller implicitly.
+
+`task-brief` reads `.local/config.json` to decide whether this workspace still
+needs binding. A completed setup for the same environment and recorded agent
+suppresses the `/setup` nudge. Completed/blocked tasks and tasks with unmet inputs
+do not get a binding nudge. Missing config is normal first-run state; corrupt
+config is reported explicitly. Override the config path for another workspace:
+
+```text
+python scripts/planner/cli.py task-brief --task <task-id> --config <config-path> --json
+```
+
+This check is read-only; it does not mark work complete or change assignments.
+The skill's post-completion handoff captures verified outcomes, synchronizes
+eligible shared progress, and recommends the next task without starting it.
 
 ## Local, shared, and confirmed are different states
 

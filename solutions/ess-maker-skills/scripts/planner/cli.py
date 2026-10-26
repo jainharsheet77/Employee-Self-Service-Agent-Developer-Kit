@@ -615,7 +615,7 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     """Brief a task's assignee: how to do it, their role, the resolved values it
     consumes (e.g. the env id from setup), and the keys to capture when done."""
     plan = _load(args)
-    brief = plan.task_brief(args.task)
+    brief = plan.task_brief(args.task, workspace_config=read_config(args.config))
     if args.json:
         print(json.dumps(brief, indent=2))
         return 0
@@ -1229,6 +1229,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("task-brief", help="brief an assignee: how, role, consumed values, outputs to capture")
     p.add_argument("--task", required=True)
+    p.add_argument("--config", default=os.path.join(".local", "config.json"),
+                   help="workspace setup config used to avoid repeating an already-complete binding")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_task_brief)
 
