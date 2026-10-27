@@ -1,5 +1,9 @@
 # Planner — Phase 4: Assign each Task (Flow 1) — a follow-up after the plan is shown
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
 **Default to role-assigned; don't interview per task.** By the time you get here the plan
 is modelled with every Task grounded to a role. **Do not** walk the sponsor through a
 per-task "who does this?" questionnaire before they've seen the plan — that's the

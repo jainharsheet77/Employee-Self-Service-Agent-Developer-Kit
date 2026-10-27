@@ -15,10 +15,60 @@ pure logic.
 | `plan_model.py` | The Plan document — schema, atomic read/write, validation, `ESS-scenario-plan.md` render, and the Flow-2 (grouped-by-role) discovery query. Shaped to match the WeveNova `Plan`/`Task` entities so a future sync is a field copy. |
 | `roles.py` | The **absent-safe** roles-source seam (`RoleDirectory` / `RoleSource`). With no backing source wired, validation degrades to a well-formed-id check and enumerations return empty so the skill falls back gracefully. `StaticRoleSource` is a trivial in-memory implementation for demos/tests. |
 | `capture.py` | Observe-mode detectors that read what a Task produced from local kit state — the `/setup` → `environmentId` hand-off from `.local/config.json` (`snapshot_config`/`detect_config_artifacts`), and the `/discover` → `tenantInventory` summary from `workspace/discover/results.json` (`summarize_discovery`) — plus `ask_artifact` for assignee-supplied (mode-b) outputs. |
-| `research.py` | Table-of-Contents-first Learn research: parse a fetched `toc.json`, classify child/sibling links, relevance-select the pages to read within a budget, and extract role/output candidates from page text (`extract_signals`). Pure logic except `fetch_toc` / `fetch_page_text` (best-effort network). |
+| `research.py` | Scope Learn research after intent capture: select pages from the TOC, cache readable text and provenance for up to 24 hours, and extract role/output candidates without fetching the same pages again. Pure selection helpers plus explicit network/cache IO. |
 | `facts.py` + `planner_facts.json` | **Non-Learn** planning facts only — scenario *dependencies* (each with an explicit `source`) and a small recognition lexicon for `extract_signals`. This is **not** a business-scenario catalogue: scenarios come from the maker's description grounded in Learn (PM spec FR-1/FR-3). |
 | `cli.py` | The command surface the skill invokes (`init`, `ingest-upload`, `gaps`, `set-context`, `add-system`, `add-scenario`, `add-scenario-dependency`, `check-deps`, `add-task`, `update-task`, `remove-task`, `assign`, `claim`, `set-state`, `task-brief`, `capture-setup`, `capture-discover`, `pin-output`, `mine`, `research`, `summary`, `validate`). `ingest-upload` builds a whole plan from a maker-authored uploaded plan (normalized JSON) in one atomic write and reports the remaining gaps; `gaps` lists the intent slots a plan still lacks. `capture-discover` summarizes a `/discover` run onto the plan's tenant-inventory task. |
 | `review.py` | CSV export and read-only review proposals with stable task IDs, version checks, and spreadsheet-formula escaping. No imported review applies edits automatically. |
+
+## First Planner use in a chat
+
+Whichever Planner flow runs first performs the shared workspace bootstrap:
+new planning, imports/edits, assignments, assigned tasks, completion capture,
+evaluations, status/reports, or sharing/activation. Direct phase entries use the
+same gate in `src/skills/planner/SKILL.md`. It does not require a completed
+`/setup` or `.local/config.json`. Before the flow or any shared tool call,
+materialize this solution's `.vscode/mcp.json` and validate Planner and its
+person-resolution fallback:
+
+```text
+python scripts/mcp_config.py materialize-defaults
+python scripts/mcp_config.py validate --server ess-planner
+python scripts/mcp_config.py validate --server workiq-preview
+```
+
+Run from the solution folder and require `configured` for both servers.
+The idempotent helper preserves custom server definitions and the saved draft.
+An already-visible tool is not proof that the workspace file exists; a configured
+file is not proof that the host started the server. Reuse successful command
+results throughout the same chat/workspace, across later turns and phase changes.
+Recheck in a new chat, if the workspace/configuration changes, or if no bootstrap
+attempt is recorded. Failed bootstrap blocks shared calls, not local drafting;
+retry only when requested or after the configuration problem is corrected.
+Registration does not grant shared access or require WorkIQ sign-in for local work.
+Resume the draft and honor the requested lifecycle actions: sharing must succeed
+before activation. A service error after a real shared call remains a separate
+failure; creating the workspace configuration does not resolve it.
+
+## Scoped research
+
+Capture the requested scenarios and known systems first; an unknown system stays
+pending rather than triggering research into every connector. Retrieve the scoped
+Learn content and candidate roles/outputs together:
+
+```text
+python scripts/planner/cli.py research --fetch --extract --tokens "employee profiles Workday"
+```
+
+The response includes readable `pages`, source URLs, timestamps, and `signals`.
+Consume that text without downloading the selected pages again.
+`research-context.json` preserves existing notes alongside a managed `learnCache`.
+TOCs and pages are reused for up to 24 hours; changed scope fetches only missing
+or stale pages. Add `--refresh` to explicitly refresh grounding. This command
+does not create or modify `plan.json`, and plain status/resume needs no research.
+
+Retrieval errors are visible in JSON and stderr and produce a nonzero exit code.
+Successful pages remain cached; a failed refresh does not relabel old text as
+fresh. Invalid cache data is reported without overwriting existing notes.
 
 ## Scenario-derived experience
 
@@ -127,8 +177,35 @@ workspace/plan/research-context.json   cached Learn-research corpus
 
 ## Tests
 
-- Tests: `tests/planner/` (pure logic + local IO; no network, no cassettes).
+- Tests: `tests/planner/` (pure logic + local IO; research fetches are mocked
+  except for the separately opted-in live TOC check).
   Run from the repo root: `python -m pytest tests/planner`.
 
 Nothing here requires WeveNova, tenant inventory, or a roles source — the Plan
 is authoritative on disk and works with all three absent.
+
+### Two-account live service validation
+
+`tests/mcp/planner/test_planner_live.py` exercises the real stdio MCP and shared
+service with a maker and a different administrator in a dedicated test tenant.
+It covers a shared draft, explicit activation, deferred owners/systems,
+independent progress, caller-scoped tasks, completion acknowledgment, and
+environment metadata releasing dependent work.
+
+Set `ESS_PLANNER_LIVE_TENANT_ID`, `ESS_PLANNER_LIVE_MAKER_UPN`,
+`ESS_PLANNER_LIVE_ADMIN_UPN`, and `ESS_PLANNER_LIVE_ENVIRONMENT_URL` locally.
+To authorize test writes, set `ESS_PLANNER_LIVE_ALLOW_WRITES` to that same tenant
+ID. Never commit these settings or authentication data. Then run from the root:
+
+```text
+python -m pytest tests/mcp/planner/test_planner_live.py --run-live -q -s --tb=short --no-showlocals
+```
+
+Browser sign-in verifies each identity; the administrator also signs in for
+read-only Power Platform environment lookup. Tokens stay in memory, separate
+from normal kit sign-in caches. The test refuses to run over existing plans,
+creates the ESS project only if absent, and archives only its own test plan.
+Do not use a tenant where someone else is concurrently creating/activating plans.
+No environment is provisioned, no ESS package is installed, and no tenant role
+is granted. This is service/protocol evidence, **not** a conversational VS Code ER
+or proof that `/setup` ran successfully.

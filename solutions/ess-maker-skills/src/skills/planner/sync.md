@@ -6,6 +6,21 @@ through the planner tools available to you. This file is the concrete flow for
 keeping the two in step: pull an existing plan on entry, and push a newly
 authored plan as one object.
 
+## Entry preflight
+
+Complete the **workspace bootstrap before any shared tool call**. Follow
+`src/skills/planner/SKILL.md` -> **Gate** on first Planner use, including a direct
+pull/share/activate/sync request in a fresh chat. Reuse successful results in the
+same chat and workspace for later turns or phases, following the gate's
+recheck/failure rules. A saved plan, absent setup config, or already-visible
+Planner tools do not replace this chat's bootstrap.
+
+If configuration creation/validation fails, keep the local draft unchanged,
+report that error, and stop shared calls. Configuration, host discovery/trust,
+and a service response are separate evidence: never infer the workspace file
+exists just because a tool is exposed, or label an unavailable tool as a service
+failure. Bootstrap does not grant shared access or authorize plan mutations.
+
 **Rules that never bend:**
 
 - **Make persistence truthful.** Say **Saved in this workspace**, **Shared draft**,
@@ -13,9 +28,11 @@ authored plan as one object.
   the shared plan**, as appropriate. Avoid unnecessary backend names, but explain
   `ess-planner` when the host requests approval. Never hide a failure or equate a
   local file write with a successful shared update.
-- **The CLI never talks to the network; the tools never touch local files.** The
-  CLI (`scripts/planner/cli.py`) only reads/writes the local cache. The planner
-  tools only talk to the service. You are the bridge: you carry JSON between
+- **Plan mutations stay local in the CLI; shared writes use tools.** The CLI
+  (`scripts/planner/cli.py`) reads/writes the local plan. Its `research`
+  command can fetch public Learn documentation, not the shared planner.
+  The planner tools talk to the service and never touch local files.
+  You are the bridge: you carry JSON between
   `export-remote-plan`/`import-remote-plan` and the tools.
 - **Importing: hand each tool result to the CLI as its own file — never splice
   them yourself.** Re-hydrating always means
@@ -71,7 +88,8 @@ proceed?" question. Planning is never blocked by the service.
 
 ## Identify the project (always first)
 
-These shared operations apply only when the maker has accepted shared access.
+These shared operations apply only after entry preflight and when the maker has
+accepted shared access.
 For an explicitly local-only draft or declined trust prompt, keep working locally
 and skip this flow until they ask for shared access.
 
@@ -155,7 +173,7 @@ cache — that is a valid resting state until the sponsor asks to share it, not 
 to chase. **This explicit gate is only for the *first* store**; once the plan has
 been shared, later changes sync automatically (see *Ongoing edits* below).
 
-When the sponsor asks to share the plan you built locally (research → interview →
+When the sponsor asks to share the plan you built locally (interview → research →
 model), store it in **one** create call rather than task-by-task:
 
 1. **Reuse the scenario-inferred target confirmed with the draft**, or the

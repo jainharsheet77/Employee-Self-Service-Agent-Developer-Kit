@@ -1,6 +1,10 @@
 # Planner — Phase 3: Model the Tasks
 
-Turn the grounded prerequisite graph (Phase 1) into **atomic Tasks**. A Task is
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
+Turn the grounded prerequisite graph (Phase 2) into **atomic Tasks**. A Task is
 the smallest unit one owner can complete end-to-end. Each Task is described by a
 **title** and a **description** — nothing else is needed to understand it.
 
@@ -49,7 +53,7 @@ into the plan.
 **Every Task is assigned to a role at creation — the role that should be able to
 pick it up — and that role is _sourced from the Learn link_, never invented.** The
 `--role` and `--produces` values come from the **Learn page for that prerequisite**
-(Phase 1; the `research --extract` step surfaces the role candidates). Ground the
+(Phase 2; the `research --extract` step surfaces the role candidates). Ground the
 role, then set `--role` to its **attestable** id (the mapping under *A Task is not
 a skill's steps* below) — the shared planner only accepts attestable roles, so a
 raw grounded slug leaves the Task unassignable. Keep the
@@ -186,7 +190,7 @@ The "how" is the **description** (say which command to run in prose); `produces`
 | Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `WorkdayAdmin` |
 | Install Workday pack & connect | Run `/connect` — install the Workday extension pack and create the connection — §5 | `workdayConnection` | `primaryEnvironment, essAgent, workdayEntraApp, workdayTenantConfig, workdayNetworkAllowlist` | `PowerPlatformEnvironmentMaker` |
 | Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `EntraNetworkAdministrator` |
-| Connect ServiceNow | Run `/connect` — decompose per its own checklist `role:` items (read `setup/servicenow/tasks.md`) | `servicenowConnection` | `primaryEnvironment` | `ServiceNowAdmin` *(+ `PowerPlatformEnvironmentMaker` per its checklist)* |
+| Connect ServiceNow | Run `/connect`; use `src/skills/connect/servicenow/steps.md` for the procedure and Learn for the responsible roles. This checklist is not role-tagged; do not treat it as Workday's extractor input. | `servicenowConnection` | `primaryEnvironment` | `ServiceNowAdmin` *(+ `PowerPlatformEnvironmentMaker` where the grounded steps require it)* |
 | Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `PowerPlatformEnvironmentMaker` |
 | Generate evals | Automatically continue to the existing evaluation-generation flow for the selected scope; retain review and push approval | `evalSuite` | environment, agent, actual scenario topic outputs | `PowerPlatformEnvironmentMaker` |
 | Run evaluations | Execute the generated suite using the supported runtime and record observed results | `evaluationResults` | `evalSuite`, required topic/connection outputs | `PowerPlatformEnvironmentMaker` |
@@ -228,7 +232,7 @@ shown**, not a gate (`src/skills/planner/assign.md`).
 
 **Native connector vs. custom flow.** A "run `/connect`" task is only valid for a
 system ESS has a **native integration** for (Workday, ServiceNow HRSD/ITSM, SAP
-SuccessFactors — confirm from Phase‑1 Learn research). For a captured system with
+SuccessFactors — confirm from Phase-2 Learn research). For a captured system with
 **no** native connector (e.g. ADP, Jira, Dynamics 365, custom HTTP API), describe a
 **"run `/create`" (custom Power Automate flow)** task instead — do not fabricate a
 `connect` task for it. SharePoint / M365 content is a **knowledge source**, so it's
@@ -269,7 +273,7 @@ for other personas is **driven by the plan having an env id**, not fired blindly
 
 ## Emit the full task set now (do not stop at setup)
 
-From the systems and scenarios captured in Phase 2, create **every** task now —
+From the systems and scenarios captured in Phase 1 and grounded in Phase 2, create **every** task now —
 not just setup. For *"file HR tickets + get HR knowledge, on Workday + ServiceNow"*
 that is:
 
@@ -290,7 +294,7 @@ python scripts/planner/cli.py setup-tasks --system workday --commands --skip-fou
 #    Each printed row already carries --stream "Workday" so they group together.
 # 4. ServiceNow — unlike Workday, it ships NO grounded checklist (setup-tasks only
 #    grounds Workday today, and `system_setup_tasks("servicenow")` raises). So DON'T
-#    imply a checklist: decompose ServiceNow from your Phase-1 research, splitting it
+#    imply a checklist: decompose ServiceNow from your Phase-2 research, splitting it
 #    along the same role boundaries as Workday (config is a ServiceNow Administrator
 #    task; the pack install an Environment Maker one).
 python scripts/planner/cli.py add-task --id T-sn-config --stream "ServiceNow" --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per the connect research for ServiceNow — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment

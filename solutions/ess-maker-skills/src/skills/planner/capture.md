@@ -1,5 +1,9 @@
 # Planner — Phase 6: Capture what a Task produced
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
 A Task declares the output **keys** it should yield (`produces`, grounded from
 Learn). When an assignee finishes a Task, fill a value for each key — then
 **confirm with the person who did it** before pinning it onto the Plan. Two

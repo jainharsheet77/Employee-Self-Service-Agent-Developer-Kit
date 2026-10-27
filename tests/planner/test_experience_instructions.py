@@ -248,3 +248,122 @@ def test_progress_refreshes_next_action_from_current_state_for_the_same_person()
         assert phrase in refresh
     for path in ("planner/SKILL.md", "planner/capture.md", "planner/sync.md", "planner/assign.md"):
         assert "Refresh after progress" in _text(path)
+
+
+def test_native_planner_preserves_explicit_sharing_and_activation():
+    path = SKILLS.parents[1] / ".github" / "skills" / "planner" / "SKILL.md"
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    assert "local draft" in text
+    assert "explicitly asks to share" in text
+    assert "explicit activation" in text
+    assert "declined shared access" in text
+    assert "once built, it is published" not in text
+
+
+def test_intent_capture_precedes_scoped_research():
+    main = _text("planner/SKILL.md")
+    assert main.index("| 1. Interview |") < main.index("| 2. Research |") < main.index("| 3. Model |")
+    research = " ".join(_text("planner/research.md").split())
+    assert "Capture intent before research" in research
+    assert "unknown systems" in research
+    interview = " ".join(_text("planner/interview.md").split())
+    assert "one batched `vscode_askQuestions` call" in interview
+    assert "Do not ask each area in a separate turn" in interview
+    assert "Ask once per captured area" not in interview
+
+
+def test_research_reuses_fetched_content_and_exposes_freshness():
+    text = " ".join(_text("planner/research.md").split())
+    for phrase in ("research-context.json", "24 hours", "--refresh", "Do not fetch selected pages again"):
+        assert phrase in text
+    assert "no persisted" not in text
+    assert "Read the selected pages** with your fetch tool" not in text
+
+
+def test_servicenow_grounding_uses_its_existing_connect_checklist():
+    text = _text("planner/model.md")
+    assert "setup/servicenow/tasks.md" not in text
+    assert "src/skills/connect/servicenow/steps.md" in text
+    assert (SKILLS / "connect" / "servicenow" / "steps.md").is_file()
+    row = next(line for line in text.splitlines() if line.startswith("| Connect ServiceNow |"))
+    assert "Learn" in row
+    assert "role:` items" not in row
+
+
+def test_workspace_collapses_display_without_changing_models():
+    path = SKILLS.parents[1] / ".vscode" / "settings.json"
+    settings = json.loads(path.read_text(encoding="utf-8"))
+    assert settings["chat.agent.thinkingStyle"] == "collapsed"
+    assert settings["chat.agent.thinking.collapsedTools"] == "always"
+    assert settings["chat.experimental.persistentProgress"] == "off"
+    assert not any("model" in key.lower() or "reasoningEffort" in key for key in settings)
+
+
+def test_native_planner_discovers_existing_plan_lifecycle_requests():
+    path = SKILLS.parents[1] / ".github" / "skills" / "planner" / "SKILL.md"
+    metadata = " ".join(path.read_text(encoding="utf-8").split("---", 2)[1].split())
+    for phrase in (
+        "VS Code", "share and activate the plan", "resume", "status", "before setup",
+        "import", "edit", "assign owners", "record task completion",
+    ):
+        assert phrase in metadata
+
+
+def test_existing_draft_and_visible_tools_do_not_skip_workspace_bootstrap():
+    text = _text("planner/SKILL.md")
+    gate, resume = text.split("## Gate", 1)[1].split("## First", 1)
+    assert "After completing the Gate above" in resume
+    prose = " ".join(gate.split())
+    assert gate.index("materialize-defaults") < gate.index("validate --server ess-planner")
+    for phrase in (
+        "first Planner use in each chat",
+        "existing local draft",
+        "tools are already visible",
+        ".vscode/mcp.json",
+        "configured",
+        "earlier session",
+    ):
+        assert phrase in prose
+
+
+def test_planner_bootstrap_is_reused_across_flows_but_not_across_chats():
+    gate = _text("planner/SKILL.md").split("## Gate", 1)[1].split("## First", 1)[0]
+    prose = " ".join(gate.split())
+    for phrase in (
+        "same chat and workspace",
+        "later turns or phases",
+        "workspace or MCP configuration changes",
+        "no bootstrap attempt is recorded",
+        "failed bootstrap",
+        "validate --server workiq-preview",
+        "does not grant shared access",
+    ):
+        assert phrase in prose
+    assert "current interaction" not in gate
+    assert "once per Planner entry" not in gate
+
+
+@pytest.mark.parametrize(
+    "phase",
+    sorted(path.name for path in (SKILLS / "planner").glob("*.md") if path.name != "SKILL.md"),
+)
+def test_every_planner_phase_enters_through_the_shared_chat_bootstrap(phase):
+    entry = " ".join(_text(f"planner/{phase}").splitlines()[:18])
+    assert "src/skills/planner/SKILL.md" in entry
+    assert "Gate" in entry
+    assert "workspace bootstrap" in entry
+    assert "first Planner use" in entry
+    assert "same chat and workspace" in entry
+
+
+@pytest.mark.parametrize("entry", ["native", "prompt", "sync"])
+def test_lifecycle_entrypoints_bootstrap_before_shared_calls(entry):
+    if entry == "native":
+        path = SKILLS.parents[1] / ".github" / "skills" / "planner" / "SKILL.md"
+    elif entry == "prompt":
+        path = SKILLS.parents[1] / ".github" / "prompts" / "planner.prompt.md"
+    else:
+        path = SKILLS / "planner" / "sync.md"
+    prose = " ".join(path.read_text(encoding="utf-8").split())
+    assert "workspace bootstrap" in prose
+    assert "before any shared tool call" in prose

@@ -30,6 +30,7 @@ import json
 import os
 import sys
 import textwrap
+from typing import Any
 
 # Ensure scripts/ is on the path so ``import planner...`` resolves when this
 # file is run directly (mirrors scripts/flightcheck/cli.py).
@@ -47,6 +48,7 @@ from planner.plan_model import (
     ARTIFACT_KINDS,
     CONFIGURING_AGENT_CHOICES,
     PLAN_PATH,
+    RESEARCH_PATH,
     SCENARIO_GROUP,
     SUMMARY_FILENAME,
     Plan,
@@ -672,16 +674,31 @@ def cmd_mine(args: argparse.Namespace) -> int:
 
 
 def cmd_research(args: argparse.Namespace) -> int:
+    if not args.toc and not args.fetch:
+        print("Provide --toc FILE or --fetch.", file=sys.stderr)
+        return 2
+    if args.refresh and not args.extract:
+        print("--refresh requires --extract; preview mode does not use a research cache.", file=sys.stderr)
+        return 2
+    toc = None
     if args.toc:
         with open(args.toc, "r", encoding="utf-8") as fh:
             toc = json.load(fh)
-    elif args.fetch:
-        toc = research.fetch_toc(research.toc_url(args.base))
-    else:
-        print("Provide --toc FILE or --fetch.", file=sys.stderr)
-        return 2
-    nodes = research.flatten_toc(toc)
     tokens = research.intent_tokens(args.tokens or "")
+    if args.extract:
+        path = os.path.join(os.path.dirname(args.plan) or ".", os.path.basename(RESEARCH_PATH))
+        result = research.collect_research(
+            path, tokens=tokens, base=args.base, budget=args.budget,
+            toc=toc, refresh=args.refresh,
+        )
+        result["signals"] = _extract_signals_for(result["pages"])
+        print(json.dumps(result, indent=2))
+        for error in result["errors"]:
+            print(f"Learn research incomplete for {error['url']}: {error['message']}", file=sys.stderr)
+        return 1 if result["errors"] else 0
+    if toc is None:
+        toc = research.fetch_toc(research.toc_url(args.base))
+    nodes = research.flatten_toc(toc)
     hrefs = research.select_hrefs(nodes, tokens, budget=args.budget)
     selected = [{"href": h, "url": research.page_url(h, args.base)} for h in hrefs]
     result = {
@@ -690,8 +707,6 @@ def cmd_research(args: argparse.Namespace) -> int:
         "totalPages": len(nodes),
         "selected": selected,
     }
-    if getattr(args, "extract", False):
-        result["signals"] = _extract_signals_for(selected)
     print(json.dumps(result, indent=2))
     return 0
 
@@ -717,23 +732,16 @@ def cmd_setup_tasks(args: argparse.Namespace) -> int:
     return 0
 
 
-def _extract_signals_for(selected: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
-    """Fetch each selected page and pull role/output candidates off it, grounded
-    to the page they came from. Network + best-effort: pages that fail to fetch
-    are skipped, never fatal. The recognition vocabulary comes from the vendored
-    facts file (falling back to the module defaults)."""
+def _extract_signals_for(pages: list[dict[str, Any]]) -> dict[str, list[dict[str, str]]]:
+    """Extract candidates from the already-fetched text, without another request."""
     from planner import facts
 
     roles = facts.role_lexicon() or list(research.DEFAULT_ROLE_LEXICON)
     outputs = facts.output_lexicon() or list(research.DEFAULT_OUTPUT_LEXICON)
     role_hits: dict[str, str] = {}
     output_hits: dict[str, str] = {}
-    for item in selected:
-        try:
-            text = research.fetch_page_text(item["url"])
-        except Exception:  # noqa: BLE001 — one bad page must not sink the crawl
-            continue
-        sig = research.extract_signals(text, roles=roles, outputs=outputs)
+    for item in pages:
+        sig = research.extract_signals(item["text"], roles=roles, outputs=outputs)
         for role in sig["roles"]:
             role_hits.setdefault(role, item["href"])
         for out in sig["outputs"]:
@@ -1240,12 +1248,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_mine)
 
-    p = sub.add_parser("research", help="preview Learn page selection from a TOC")
+    p = sub.add_parser("research", help="preview or cache intent-scoped Learn research")
     p.add_argument("--tokens", help="intent tokens, e.g. 'workday servicenow'")
     p.add_argument("--toc", help="path to a local toc.json")
     p.add_argument("--fetch", action="store_true", help="fetch the live TOC (network)")
     p.add_argument("--extract", action="store_true",
-                   help="also fetch each selected page and extract role/output candidates (network)")
+                   help="return readable pages and candidates, reusing cached research for up to 24 hours")
+    p.add_argument("--refresh", action="store_true",
+                   help="with --extract, bypass cached TOC/pages and fetch current Learn content")
     p.add_argument("--base", default=research.LEARN_SECTION_BASE)
     p.add_argument("--budget", type=int, default=18)
     p.set_defaults(func=cmd_research)

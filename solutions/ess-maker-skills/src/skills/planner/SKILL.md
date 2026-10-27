@@ -2,8 +2,8 @@
 
 This skill authors a **Plan**: a structured, local record of an ESS rollout —
 the sponsor's intent, a set of atomic Tasks each owned by a role and a person,
-and a ledger of what each Task produced. It grounds itself by *researching
-Microsoft Learn*, interviews the sponsor for what it can't ground, assigns the
+and a ledger of what each Task produced. It captures the sponsor's intent first,
+grounds that scope by *researching Microsoft Learn*, assigns the
 work, and captures Task outputs so later Tasks read them straight off the Plan.
 `/setup` owns foundation prerequisites, environment selection/provisioning guidance,
 ESS installation, and this person's workspace binding. A shared environment does
@@ -87,22 +87,50 @@ Every other skill requires `.local/config.json` with `setup: "complete"`.
 `/planner` is the exception: on a greenfield tenant the environment doesn't
 exist yet, and the first Task the Plan emits is usually "run setup". So:
 
-1. **Make the planner's tools reachable.** The planner talks to the
-   shared planner (and, for person resolution, the WorkIQ fallback) through MCP
-   servers a clean workspace hasn't registered yet, and `/setup` — which would
-   otherwise wire them — may not have run. Materialize the committed defaults so
-   those servers reach the MCP host:
-   `python scripts/mcp_config.py materialize-defaults`. It is idempotent and
-   preserves any existing overrides, so it's safe to run on every entry. Explain
-   any host permission prompt as above, not the command itself.
+1. **Complete the workspace bootstrap on first Planner use in each chat.**
+   Whichever flow starts first runs this shared gate: creating/interviewing,
+   researching/modelling, importing, resuming/editing/reviewing, assigning owners,
+   listing/briefing/claiming tasks, capturing completion, evaluating, reporting
+   status, or sharing/activating. A direct phase entry follows this gate too;
+   do not restart the interview just to initialize a different flow.
+   Run it before that flow and before any shared tool call, even with an existing
+   local draft or when Planner tools are already visible.
+   Neither proves that this solution workspace has its own `.vscode/mcp.json`.
+   Run from the kit root:
+
+   ```text
+   python scripts/mcp_config.py materialize-defaults
+   python scripts/mcp_config.py validate --server ess-planner
+   python scripts/mcp_config.py validate --server workiq-preview
+   ```
+
+   Require `configured` for both `ess-planner` and the `workiq-preview`
+   person-resolution fallback in `.vscode/mcp.json`; command success alone is
+   not that check. Materialization creates a missing file, merges the committed
+   defaults, and preserves overrides. Registration does not grant shared access,
+   authorize WorkIQ use, create/share a plan, or complete `/setup`. Respect
+   local-only drafting; use WorkIQ only when the person-resolution flow needs it.
+   Reuse successful command results from the same chat and workspace for later
+   turns or phases; do not rerun bootstrap for each request or phase handoff.
+   Never rely on an earlier session, a saved plan, or the persistent defaults
+   state file as proof of this chat's check. If the workspace or MCP configuration
+   changes, recheck. If no bootstrap attempt is recorded for this chat, run it now;
+   a recorded failure follows the retry rule below.
+   If materialization or validation fails, preserve the draft, report the actual
+   configuration error, and do not attempt shared operations. Keep permitted
+   local work available. A failed bootstrap is not retried at each turn or phase:
+   retry only when requested or after the configuration problem is corrected.
+   A configured file is also not proof that the host has started the server.
+   Handle host discovery/trust separately, explain permission prompts as above,
+   and never describe missing tools as a shared-service error.
 2. Read `.local/config.json` if it exists (to reuse the environment/agent
    details and enable output capture).
 3. Whether or not setup is complete, **proceed** with planning.
 
 ## First — resume an existing plan, or start a new one
 
-**Always begin here. Do NOT ask for the objective (or anything else) until you
-have checked for an existing plan.**
+**After completing the Gate above, begin plan routing here. Do NOT ask for the
+objective (or anything else) until you have checked for an existing plan.**
 
 1. **Pull from the shared planner first — without an extra interview turn.**
    If the maker chose local-only drafting or declined shared access, use the saved
@@ -126,6 +154,12 @@ have checked for an existing plan.**
    (freshly pulled, or a local draft not yet pushed).
 2. **Once the plan is loaded, resume it — do not re-interview and do not ask for
    the objective again.**
+   - **Honor an explicit lifecycle request.** If the user asked to share or
+     activate, carry that intent through resume and follow `sync.md`; do not
+     replace it with a status-only response. For "share and activate", confirm
+     sharing succeeded before attempting activation. Reuse an existing shared
+     identity, and report an already-active plan instead of creating a duplicate.
+     Preserve the lifecycle ownership and previous-version archival safeguards.
    - **Reconcile a finished first-run setup — invisibly, once.** The Power
      Platform admin usually runs `/setup` as their first-run experience, so the
      environment can already exist while the plan's setup task still reads Not
@@ -212,8 +246,8 @@ per **First** above instead of re-running the interview.)
 
 | Phase | What | Read |
 |-------|------|------|
-| 1. Research | Ground on Microsoft Learn (TOC crawl) **and the kit's own skills** (setup/connect checklists + role maps) → capabilities, prerequisites, roles, produced/consumed keys, and the deterministic setup decomposition | `src/skills/planner/research.md` |
-| 2. Interview | Reuse known goal, scenarios, and systems; explain choices and save unknown answers as pending decisions. Generate draft scenario evaluation cases in-flow. | `src/skills/planner/interview.md` |
+| 1. Interview | Reuse the request/upload and catalogue; capture only missing goal, scenarios, and systems in at most three batched turns. Save unknown answers as pending decisions. | `src/skills/planner/interview.md` |
+| 2. Research | Ground the captured scope on Microsoft Learn **and the kit's own skills**. Reuse fresh cached page text; fetch only missing/stale sources before modelling capabilities, prerequisites, roles, and outputs. | `src/skills/planner/research.md` |
 | 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then **show its sequencing** — parallel waves, what's blocked, the critical path | `src/skills/planner/model.md` |
 | 4. Assign (follow-up) | Suggested after the plan is shown — put names to the roles **only when the sponsor asks**, never a gate before sharing or a fired question | `src/skills/planner/assign.md` |
 | 5. Evaluate | Persist scenario test cases during planning, then orchestrate native evaluation generation as the required topics become available; preserve review and push approval. | `src/skills/planner/evaluate.md` |
@@ -235,17 +269,18 @@ don't re-interview, rebuild the plan, or execute the recommended action.
 > plan. Phase 3 must emit the **full task set** grounded in research and the
 > sponsor's chosen systems/scenarios: the setup task **plus**, for each captured
 > system, its **role-boundary connect decomposition** researched from that
-> system's setup checklist (Phase 1 axis 2 — Workday is *seven* tasks across five
+> system's setup checklist (Phase 2 axis 2 — Workday is *seven* tasks across five
 > roles, not one coarse "connect" task), authoring tasks per scenario, an evals
 > task, and publish — each with a grounded role and `produces`/`consumes`
 > keys. **Do not stop after adding the "run setup" task.** The interview
-> (Phase 2) must capture the scenarios and either known systems or explicit pending
-> system decisions before Phase 3 —
+> (Phase 1) must capture the scenarios and either known systems or explicit pending
+> system decisions before scoped research in Phase 2 and modelling in Phase 3 —
 > those drive the tasks and the roles. Once the full set is modelled, **show its
 > sequencing** — the parallel waves, what's blocked on whom, and the critical
 > path (`model.md` → *Sequence the tasks*) — so the rollout can be staffed in
 > parallel. As soon as scenarios + goals are captured
-> (Phase 2), Phase 5 generates and saves scenario test cases. Native tests follow
+> (Phase 1), Phase 5 generates and saves draft scenario test cases; refine them
+> against Phase 2 grounding. Native tests follow
 > in the same guided flow when their prerequisites exist; a preview is not a test run.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
@@ -328,7 +363,7 @@ progress updates, but does not run tasks or deploy ESS automatically. Use the
 example in `interview.md`; edit locally before sharing. Then
 stop, and run any step only if the sponsor asks in a later turn (see
 `src/skills/planner/interview.md` → *After the plan is shown*).** During
-the interview (Phase 2), once
+the interview (Phase 1), once
 scenarios + goals are captured, generate and persist scenario evaluation cases
 (Phase 5, `src/skills/planner/evaluate.md`); **Phase 6**
 (capture) runs later as each Task executes. Once the plan exists, hand the editor

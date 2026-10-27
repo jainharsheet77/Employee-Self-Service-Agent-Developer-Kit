@@ -1,5 +1,9 @@
 # Planner — Editing the plan (the Markdown round-trip)
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
 The Plan's human view — `workspace/plan/ESS-scenario-plan.md` — is not just a
 read-out. It is the **editable surface** the maker works with. The CLI
 regenerates it from `plan.json` after every change, and the maker can revise it

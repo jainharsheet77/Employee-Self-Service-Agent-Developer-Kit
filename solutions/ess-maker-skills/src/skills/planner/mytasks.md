@@ -1,5 +1,9 @@
 # Planner — Flow 2: "What am I assigned?"
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
 When a person asks what work is waiting on them, show their Tasks **grouped by
 each role they hold** — which naturally covers a person with more than one role.
 

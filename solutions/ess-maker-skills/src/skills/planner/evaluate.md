@@ -1,5 +1,9 @@
 # Planner - Phase 5: Generate evaluations in the guided flow
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
 The planner orchestrates the existing evaluation skills; it does not invent a
 second YAML format, grader, or runtime. The maker must not have to discover and
 invoke a separate `/evaluate` command.

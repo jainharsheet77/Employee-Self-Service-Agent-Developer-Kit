@@ -433,9 +433,9 @@ _LEARN_LIST_KEYS = (
 def learn_links(research: Any) -> list[dict[str, str]]:
     """Best-effort ``[{label, url, scope}]`` extracted from a research corpus.
 
-    The corpus is agent-authored and free-form (there is no persisted schema
-    yet — see src/skills/planner/research.md), so this tolerates a top-level
-    list or a dict holding lists under any of ``_LEARN_LIST_KEYS``, reads the
+    The corpus can contain managed Learn research alongside older agent-authored
+    notes. This tolerates a top-level list or a dict holding lists under any of
+    ``_LEARN_LIST_KEYS``, reads the
     label/url/scope from the usual field spellings, de-dupes by url, and never
     raises. A missing or unrecognised corpus yields an empty list.
     """
@@ -465,6 +465,11 @@ def learn_links(research: Any) -> list[dict[str, str]]:
     if isinstance(research, list):
         take(research)
     elif isinstance(research, dict):
+        cache = research.get("learnCache")
+        if isinstance(cache, dict) and isinstance(cache.get("pages"), dict):
+            selected = cache.get("selected")
+            if isinstance(selected, list):
+                take([cache["pages"].get(url) for url in selected if isinstance(url, str)])
         for key in _LEARN_LIST_KEYS:
             take(research.get(key))
     return out
@@ -473,14 +478,30 @@ def learn_links(research: Any) -> list[dict[str, str]]:
 def read_research_context(directory: str | os.PathLike[str]) -> Any | None:
     """Best-effort load of the Learn-research corpus (``research-context.json``)
     next to the plan. Returns parsed JSON, or ``None`` when absent/unreadable so
-    the Markdown view enriches from it only when it exists (there is no persisted
-    sidecar today; see src/skills/planner/research.md)."""
+    the Markdown view enriches from it only when it exists. Managed research
+    writes this sidecar; older agent-authored grounding notes remain supported."""
     path = os.path.join(os.fspath(directory), os.path.basename(RESEARCH_PATH))
     try:
         with open(path, "r", encoding="utf-8") as fh:
             return json.load(fh)
     except (OSError, ValueError):
         return None
+
+
+def write_json_atomic(path: str | os.PathLike[str], data: dict[str, Any]) -> None:
+    """Persist a plan or its research sidecar without exposing a partial write."""
+    path = os.fspath(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, indent=2, ensure_ascii=False)
+        fh.flush()
+        try:
+            os.fsync(fh.fileno())
+        except OSError:
+            # Some network filesystems do not support fsync; replacement is atomic.
+            pass
+    os.replace(tmp, path)
 
 
 # --------------------------------------------------------------------------- #
@@ -547,20 +568,7 @@ class Plan:
         Mirrors ``scripts/setup.py`` so a crash mid-write can never leave a
         half-written file that breaks a later read.
         """
-        path = os.fspath(path)
-        parent = os.path.dirname(path) or "."
-        os.makedirs(parent, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(self.data, fh, indent=2, ensure_ascii=False)
-            fh.flush()
-            try:
-                os.fsync(fh.fileno())
-            except OSError:
-                # Some network filesystems don't support fsync; os.replace is
-                # still atomic on POSIX and Windows.
-                pass
-        os.replace(tmp, path)
+        write_json_atomic(path, self.data)
 
     def write_summary(
         self,

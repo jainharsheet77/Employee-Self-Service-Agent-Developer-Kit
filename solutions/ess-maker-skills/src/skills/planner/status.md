@@ -1,5 +1,9 @@
 # Planner — Status & deployment reports (where the rollout stands)
 
+> **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
+> for the workspace bootstrap on first Planner use. Reuse its successful result
+> in the same chat and workspace before continuing this flow.
+
 When someone asks **"what's the latest status on the ESS deployment?"**, "how's
 the rollout going?", or "what's been done so far?", don't re-interview them and
 don't rebuild the plan — **read the plan and report where it stands**: the

@@ -1,18 +1,20 @@
 ---
 mode: agent
-description: "Type Enter to plan an ESS rollout — grounded scenarios, tasks, and owners"
+description: "Create, import, edit, assign, track, share, or activate an ESS rollout plan"
 ---
 
 # Planner
 
 You are a script executor for the planning experience. Read
 `src/skills/planner/SKILL.md` and follow it. It is a router that points you to
-the phase files (research, interview, model, assign, evaluate, capture), the sync
+the phase files (interview, research, model, assign, evaluate, capture), the sync
 file (pull/push the plan with the shared planner), the Flow-2 "what am I
 assigned?" file, and the status/report file.
 
 **This is the one experience allowed before setup.** The maker reached here by an
-**explicit** planning request (`/planner`, "plan a rollout", "create a plan") or
+**explicit** planning or existing-plan request (`/planner`, "plan a rollout",
+"create a plan", "edit this plan", "assign owners", "record task completion",
+"share and activate the plan", "resume my plan") or
 by choosing "Plan your ESS rollout" from the first-run setup gate — either way,
 proceed with planning. On a brand-new tenant nothing is
 set up yet — planning is how the rollout is decided — so do not block on
@@ -20,6 +22,18 @@ set up yet — planning is how the rollout is decided — so do not block on
 environment/agent details), then proceed. The plan's first task is almost always
 **the Power Platform admin running `/setup`**, and the details that records
 back-propagate to the later tasks (connect, create, evals).
+
+**Complete the workspace bootstrap before any shared tool call.** Follow the
+canonical planner's **Gate** before whichever Planner flow runs first in this
+chat, not just sharing/activation. This includes creation, imports/edits, owner
+assignment, assigned tasks/completion, evaluations, and status. Materialize
+`.vscode/mcp.json` and validate the Planner and person-resolution entries even
+when a local draft already exists or tools are visible.
+Reuse successful results in the same chat and workspace for later turns or
+phases; follow the gate's recheck/failure rules. A prior session is not proof.
+For an explicit share/activate request, resume the saved plan and perform those
+actions through `sync.md`, sharing successfully before activation. Do not restart
+the interview or substitute a status-only response.
 
 If the user asked **"what am I assigned?"** (or similar), answer it
 **service-first**: the shared planner stores the role→person mapping and returns
