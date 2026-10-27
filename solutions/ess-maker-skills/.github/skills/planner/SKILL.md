@@ -28,6 +28,9 @@ directory before running anything.
    `.local/config.json`. Reuse a successful gate result in the same chat and
    workspace for later turns or phases; never assume one from an earlier session.
    Follow the gate's recheck/failure rules, not a separate bootstrap policy here.
+   If the file disappears or the MCP connection is unavailable after a previous
+   check, run the gate's bounded materialize/validate recovery before shared work.
+   Backend API errors do not trigger configuration repair.
 3. **Resume, then honor the requested action.** Follow the canonical planner's
    resume check: reuse the saved local draft or refresh the shared plan when
    access is accepted. Respect local-only drafting and declined shared access.
@@ -43,6 +46,9 @@ directory before running anything.
    at a status response or restart the interview. If both were requested, confirm
    sharing succeeded before attempting activation, following `sync.md`.
    Reuse an already-shared/active plan rather than creating a duplicate.
+4. **Keep the handoff visible.** Apply the canonical planner's **Communication
+   rules** to every reply: a prominent next-step heading, bold action, and
+   separate prompt or command. Required questions belong in the main chat.
 
 ## What the planner does
 

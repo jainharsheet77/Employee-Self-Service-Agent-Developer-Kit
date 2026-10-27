@@ -3,10 +3,17 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 Turn the grounded prerequisite graph (Phase 2) into **atomic Tasks**. A Task is
 the smallest unit one owner can complete end-to-end. Each Task is described by a
 **title** and a **description** — nothing else is needed to understand it.
+
+Do not replicate catalogue prose or the same caveat across plan context entries.
+The shared record has a 25,600-byte aggregate storage limit including server-added
+metadata; per-field validity is not enough. Let `export-remote-plan` pack generated
+workstream metadata and check the final budget (`sync.md`). Do not drop required
+tasks, dependencies, or scope to make metadata fit.
 
 Add each Task with:
 

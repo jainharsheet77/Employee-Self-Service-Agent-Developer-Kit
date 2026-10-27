@@ -45,9 +45,45 @@ Recheck in a new chat, if the workspace/configuration changes, or if no bootstra
 attempt is recorded. Failed bootstrap blocks shared calls, not local drafting;
 retry only when requested or after the configuration problem is corrected.
 Registration does not grant shared access or require WorkIQ sign-in for local work.
+Before reusing a successful check, verify that the file still exists and the
+required host tools are available. Missing configuration or an unavailable MCP
+connection triggers one materialize/validate recovery, followed by one normal
+host start/discovery attempt if needed. Do not loop or overwrite custom servers.
+An API response such as `OpenTypeTooLarge` or HTTP 500 is not MCP unavailability.
 Resume the draft and honor the requested lifecycle actions: sharing must succeed
 before activation. A service error after a real shared call remains a separate
 failure; creating the workspace configuration does not resolve it.
+
+## Shared-record size protection
+
+`scripts/planner_payload.py` is the shared export/MCP preflight. It measures
+UTF-8 JSON for persisted plan fields, not the whole create HTTP body (inline
+tasks are separate records). The ESS cap is 25,600 bytes. Client policy reserves
+1,024 bytes per record plus 256 bytes per context entry for server-stamped
+metadata. These are conservative allowances, not an exact backend serializer
+or a substitute for server-side aggregate validation.
+
+`export-remote-plan` checks the final outgoing metadata. When needed, it packs
+generated workstream labels into `taskStreamMap` scalar JSON chunks, each within
+the existing value limit. It preserves ordinary context, acceptance criteria,
+tasks, and workstream labels. Readers accept both legacy per-task carriers and
+versioned maps; older clients retain the unfamiliar map group as ordinary
+context for recovery on a later current-client export.
+
+If the result still exceeds the budget, export fails without emitting a body or
+altering the local JSON/Markdown draft. Refine redundant prose without silently
+dropping requirements, then export again. Local `validate` success alone does
+not prove a shared export fits.
+
+Direct MCP creates also check the budget. Metadata patches combine current
+persisted fields with the patch before checking; the original If-Match ETag is
+retained. Server provenance is covered by headroom rather than counted twice.
+Known `OpenTypeTooLarge` responses get non-retry guidance. Generic 500s are not
+guessed to be size errors. Diagnostics include the authenticated tenant and
+request identifiers, never tokens; a reported tenant mismatch must be resolved
+before further writes, not copied into configuration as a new default.
+After updating the kit, restart a running `ess-planner` MCP server once to load
+the new code. Materializing an unchanged definition does not hot-reload Python.
 
 ## Scoped research
 
@@ -128,6 +164,17 @@ python scripts/planner/cli.py task-brief --task <task-id> --config <config-path>
 This check is read-only; it does not mark work complete or change assignments.
 The skill's post-completion handoff captures verified outcomes, synchronizes
 eligible shared progress, and recommends the next task without starting it.
+
+Every Planner entry and phase uses the shared UI guideline's next-step handoff:
+a separate heading, a bold action, and a copyable prompt, command, or link on its
+own line. The first draft can show the ordered lifecycle roadmap; later replies
+show one current action, not the whole menu. Imported drafts follow the same
+review/share/activate journey rather than jumping straight to admin execution.
+
+Identity and approval questions belong in the main chat. An unavailable question
+is not an answer or consent, and a setup role statement does not itself request a
+plan assignment. Existing shared-plan roles can be assigned before environment
+setup; the actual environment-access checks remain separate.
 
 ## Local, shared, and confirmed are different states
 

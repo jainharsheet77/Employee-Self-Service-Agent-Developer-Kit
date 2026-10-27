@@ -72,7 +72,14 @@ setup handoff:
 
 Your ESS foundation and local workspace are complete and ready for integrations.
 
-Run `/connect` and choose the system you want to connect. Topic creation remains a
-separate `/create` workflow.
+Topic creation remains a separate `/create` workflow.
+
+## Your next step
+
+**Connect your first system.**
+
+Choose the system you want employees to use through ESS.
+
+**Run:** `/connect`
 
 **End message.**

@@ -28,6 +28,16 @@ through the handoff. A plan nomination is not proof of administrative access:
 keep the real environment-access checks, and explain the specific missing
 permission rather than repeatedly asking which persona the maker is.
 
+A setup role statement is not a plan-assignment request. If the maker says
+"I am the Power Platform admin" while starting or continuing setup, acknowledge
+that role and continue this flow. Do not require a name or work email to proceed,
+and do not call role-attestation tools merely to record that statement. Keep the
+real sign-in and environment-access checks; a role claim does not satisfy them.
+If a separate, explicit plan assignment is also requested, keep it distinct and
+do not let unresolved plan identity block independent setup work. Required
+questions stay in the main chat under the shared formatting guideline, never in
+a delegated execution flow.
+
 ---
 
 ## Start

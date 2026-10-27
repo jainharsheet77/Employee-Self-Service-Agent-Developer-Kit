@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 The planner orchestrates the existing evaluation skills; it does not invent a
 second YAML format, grader, or runtime. The maker must not have to discover and
@@ -31,6 +32,10 @@ Use stable `eval.<scenario>.<case>` keys. Update the same keys on refinement and
 remove cases that are explicitly out of scope. Do not append another full set on
 every resume. Stay within the model's context-entry and value-size limits; group
 related named capabilities into a representative case rather than exceeding them.
+Also respect the aggregate shared-record budget in `sync.md`: field-by-field
+validity does not account for server-added metadata. Avoid repeated boilerplate
+descriptions, but never remove distinct expected behavior, authorization, or
+write-confirmation requirements merely to fit.
 If a large scope exceeds the budget, report it and retain the detailed cases in the
 approved scenario contracts when authoring begins; never silently drop coverage.
 

@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 When someone asks **"what's the latest status on the ESS deployment?"**, "how's
 the rollout going?", or "what's been done so far?", don't re-interview them and
@@ -131,10 +132,36 @@ Do not reuse the previous recommendation or make the person ask for status again
    another role's newly unblocked task is a handoff, not their next assignment.
    Stop recommending Share, Activate, or a role nomination once it is done.
 
-Close with what changed and the updated **Your next step**, including how to do
-it. Recommend the next task; **do not automatically start** it. A role assignment
+Close with what changed and the updated **Your next step**, using the prominent
+handoff in `src/reference/ui-formatting-guidelines.md`: a separate heading, a
+bold action sentence, and its own continuation line. Recommend the next task;
+**do not automatically start** it. A role assignment
 does not prove the colleague's workspace is bound, and a completed workspace
 binding does not require the same person to run `/setup` again.
+
+### After activation
+
+Use this example only when readback confirms the plan is Active and the roles for
+unfinished work still have no owners. Derive any task count from that readback;
+do not label activation as a completed rollout task.
+
+> Your rollout plan is **Active**, confirmed on the shared plan.
+> Activation did not run tasks or deploy ESS.
+>
+> ## Your next step
+>
+> **Assign people to the rollout roles.**
+>
+> The roles do not have owners yet, so their work is waiting for assignment.
+>
+> **Say:** "Assign people to the roles."
+
+Use the same layout after sharing, editing, assigning, completing a task, or
+reporting status, including blocked or pending-sync outcomes. Change the action
+and continuation to fit the current requester and state; do not copy the vacancy
+example when owners already exist. For an eligible admin setup task, bold the
+task outcome and put **Run:** `/setup` on its own line. If setup was already
+requested, continue it rather than asking the user to repeat the command.
 
 ## Step 2 — Report it in plain language
 
@@ -172,11 +199,13 @@ Summarise, don't dump the table. Include the relevant points:
   (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Read who's missing
   off the plan — never guess a name. For a local draft, report nominations from
   the local plan instead of querying shared role assignments.
-- **Your next step**. End with the one requester-specific action selected above,
-  with its purpose and example prompt. Do not replace it with a generic task
+- **Your next step**. Render this as the separate heading and bold action block
+  above, not another bullet in the summary. End with the one requester-specific
+  action, its purpose, and continuation. Do not replace it with a generic task
   list or a blocking "what would you like to do next?" question.
 
-Keep it to a short readout the sponsor can act on, then offer the snapshot report.
+Keep it to a short readout the sponsor can act on. If offering a snapshot report,
+put that secondary option before the next-step handoff, not after it.
 
 ## Step 3 — Offer a static snapshot report (timestamped, downloadable)
 
@@ -221,7 +250,9 @@ not call a generator; this is a formatted view of the plan. Include:
 - <task> — waiting on <upstream task>
 
 ## Next action for <requesting person's role>
-<action, purpose, and example prompt or kit command; or why no personal work is ready>
+**<one action, or no action needed>**
+<purpose or waiting condition>
+**Say / Run / Open:** <the relevant continuation, if action is needed>
 
 ## Scenarios in scope
 - <scenario> — <system> — <met / prerequisite missing>

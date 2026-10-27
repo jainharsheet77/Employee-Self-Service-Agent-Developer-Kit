@@ -14,6 +14,27 @@ So whenever a maker names a **person** — "make Priya the ServiceNow admin",
 takes the `oid` from here and carries on. It's the one hop the plan can't do for
 you: a live **directory** lookup, so it may ask the maker to sign in.
 
+## Self-assignment and missing answers
+
+For "I" or "me" in an explicit assignment request, reuse a verified signed-in
+identity for the intended tenant when its object id and recognizable name are
+already available. Do not ask for the same name or email again. Do not infer an
+identity from the plan owner, another task's assignee, an operating-system account,
+or a role statement. A role describes responsibility, not who is signed in.
+
+If identity is still unknown, ask once in the main chat for a first or partial
+name or optional work email, with **Leave unassigned for now** available. Then
+use the lookup and confirmation flow below. Apply
+`src/reference/ui-formatting-guidelines.md` -> **Questions that need the maker**.
+A result saying "user is not available" is not an answer: keep the role
+understood but the person unresolved, and do not write an assignment. Return a
+failed delegated question to the main chat; never guess a name, store a deferral
+as if the maker chose it, or claim the role was assigned.
+
+This identity step belongs to assigning a person on the plan. It is not a
+prerequisite for a separate `/setup` request, whose sign-in and actual access
+checks are owned by foundation setup.
+
 ## How to resolve — two tiers
 
 Person resolution has **two tiers**. Tier 1 is the directory (Microsoft Graph)

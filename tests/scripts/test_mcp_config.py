@@ -324,3 +324,22 @@ def test_fresh_session_bootstrap_preserves_saved_draft_without_setup(tmp_path, p
     assert config_path.read_bytes() == config_bytes
     assert {file: file.read_bytes() for file in draft_files} == before
     assert not (tmp_path / ".local" / "config.json").exists()
+
+
+def test_deleted_config_is_rematerialized_despite_previous_success(tmp_path):
+    defaults = tmp_path / mcp_config.DEFAULTS_PATH
+    defaults.parent.mkdir()
+    shutil.copyfile(SOLUTION_ROOT / mcp_config.DEFAULTS_PATH, defaults)
+    plan_path = tmp_path / "workspace" / "plan" / "plan.json"
+    Plan.new(objective="Saved rollout draft").save_all(plan_path)
+    before = plan_path.read_bytes()
+    mcp_config.materialize_defaults(tmp_path)
+    assert mcp_config.validate_config("ess-planner", tmp_path)["status"] == "configured"
+    assert (tmp_path / mcp_config.STATE_PATH).is_file()
+    config_path = tmp_path / mcp_config.CONFIG_PATH
+    config_path.unlink()
+    assert mcp_config.validate_config("ess-planner", tmp_path)["status"] == "missing-file"
+    assert mcp_config.materialize_defaults(tmp_path)["action"] == "created"
+    for server in ("ess-planner", "workiq-preview"):
+        assert mcp_config.validate_config(server, tmp_path)["status"] == "configured"
+    assert plan_path.read_bytes() == before

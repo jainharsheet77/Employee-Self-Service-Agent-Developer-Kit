@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 Ask the **fewest questions** that let you commit a buildable, scoped, assigned
 Plan — then **generate the plan from sensible defaults and let the sponsor edit
@@ -10,6 +11,12 @@ it**, rather than interrogating every slot up front. Use the request, an upload,
 and the shipped scenario catalogue to capture intent. Do not start a broad Learn
 crawl before these inputs are known. Phase 2 verifies the captured scope and
 connector support before tasks are modelled.
+
+Keep shared context concise. State a common assumption or governance condition
+once rather than repeating it in every capability's value/description. Preserve
+the meaning and keep detailed grounding in the local research/review artifact.
+Local field validation does not prove shared storage will fit; the final export
+must pass the aggregate budget in `sync.md` before a shared write.
 
 **The question budget: three short turns, then build.** Only three things are
 worth asking before you generate a plan — ask each as one batched turn, then stop
@@ -443,7 +450,7 @@ locally (the download link **then** the grouped task checklist — `SKILL.md` �
 - start assigning roles, open the edit round-trip, or run any other follow-up on
   your own. The plan is complete as-is.
 
-Instead, close with an explicit, scannable **Next steps** readout — plain language,
+Instead, close with a prominent `## Next steps` roadmap — plain language,
 no form, no blocking question — so the sponsor sees exactly what they can do next and
 picks when ready. Show Share and Activate as separate steps. Explain what each
 does and give a copyable natural-language prompt; displaying an example is not
@@ -451,11 +458,12 @@ permission to perform it. Use this readout:
 
 > Your plan is saved locally and ready to download above.
 >
-> **Next steps**
+> ## Next steps
 >
-> 1. **Edit the plan.** Refine the proposed target, scope, sensitive fields, or
+> 1. **Review or edit the plan now.** Refine the proposed target, scope, sensitive fields, or
 >    success target before sharing.
-> 2. **Share the plan.** Save it to the shared space as a **shared draft** so
+>    **Prompt:** "Review the plan."
+> 2. **Share the plan when ready.** Save it to the shared space as a **shared draft** so
 >    colleagues with access can review it. Tasks remain read-only until activation.
 >    **Prompt:** "Share this plan."
 > 3. **Activate the plan.** Make the shared draft the **active rollout plan** so
@@ -464,6 +472,7 @@ permission to perform it. Use this readout:
 >    **Prompt:** "Activate this plan."
 > 4. **Assign people to roles.** Once the plan is active, name the people
 >    responsible for each role so they can see their tasks.
+>    **Prompt:** "Assign people to the roles."
 
 Then **end the turn.** Act on a follow-up **only when the sponsor replies asking for
 it** in a later turn:

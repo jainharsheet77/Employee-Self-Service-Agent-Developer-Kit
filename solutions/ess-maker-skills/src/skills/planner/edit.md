@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 The Plan's human view — `workspace/plan/ESS-scenario-plan.md` — is not just a
 read-out. It is the **editable surface** the maker works with. The CLI
@@ -64,6 +65,8 @@ which files you read.
 After any change lands, re-render with `python scripts/planner/cli.py summary` and
 surface the download link and a short delta summary with changed blockers, rather
 than repeating the full plan. Show the full checklist only when requested.
+Follow `status.md` -> **Refresh after progress** for the requesting person's
+updated next-step handoff; do not repeat the edit they just completed.
 
 > **Editing our view vs. importing their plan.** This file reconciles a re-upload
 > of the kit's **own** `ESS-scenario-plan.md` (diffed by task id) into a plan that

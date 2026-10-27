@@ -218,6 +218,131 @@ def test_status_entrypoints_require_the_requesting_persons_next_step(entry):
     assert "status.md" in prose
 
 
+def test_next_step_presentation_has_a_heading_bold_action_and_continuation():
+    guidelines = (SKILLS.parent / "reference" / "ui-formatting-guidelines.md").read_text(encoding="utf-8")
+    handoffs = guidelines.split("## Next-step handoffs", 1)[1].split("\n## ", 1)[0]
+    for phrase in (
+        "## Your next step",
+        "bold the action itself",
+        "**Say:**",
+        "**Run:**",
+        "**Open:**",
+        "one primary action",
+        "not a buried sentence",
+        "No action is needed from you right now",
+        "not permission to execute",
+    ):
+        assert phrase in " ".join(handoffs.split())
+    assert "## Next steps" in handoffs
+    assert "after activation" in handoffs
+
+
+@pytest.mark.parametrize("phase", [
+    "assign", "capture", "edit", "evaluate", "import", "interview",
+    "model", "mytasks", "research", "status", "sync",
+])
+def test_each_planner_phase_inherits_shared_response_presentation(phase):
+    text = _text(f"planner/{phase}.md")
+    entry = (
+        text.split("## Entry preflight", 1)[1].split("**Rules that never bend:**", 1)[0]
+        if phase == "sync"
+        else text.split("\n\n", 2)[1]
+    )
+    assert "**Communication rules**" in entry
+    assert "every reply" in entry
+    main = " ".join(_text("planner/SKILL.md").split())
+    assert "src/reference/ui-formatting-guidelines.md" in main
+    assert "Next-step handoffs" in main
+
+
+@pytest.mark.parametrize("entry", ["skill", "prompt"])
+def test_native_entrypoints_keep_next_step_presentation_visible(entry):
+    path = (
+        SKILLS.parents[1] / ".github" / "skills" / "planner" / "SKILL.md"
+        if entry == "skill"
+        else SKILLS.parents[1] / ".github" / "prompts" / "planner.prompt.md"
+    )
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    assert "Communication rules" in text
+    assert "every reply" in text
+
+
+def test_activation_follow_up_uses_the_prominent_action_block():
+    text = _text("planner/status.md")
+    example = text.split("### After activation", 1)[1].split("## Step 2", 1)[0]
+    assert "> ## Your next step\n>\n> **Assign people to the rollout roles.**" in example
+    assert '> **Say:** "Assign people to the roles."' in example
+    assert "confirmed on the shared plan" in example
+    assert "Activation did not run tasks or deploy ESS." in example
+    assert "only when readback confirms" in example
+    assert "unfinished work still have no owners" in example
+
+
+def test_initial_plan_and_import_do_not_bury_or_misroute_next_steps():
+    interview = _text("planner/interview.md").split("## After the plan is shown", 1)[1]
+    assert "> ## Next steps\n" in interview
+    assert '**Prompt:** "Review the plan."' in interview
+    assert '**Prompt:** "Assign people to the roles."' in interview
+    imported = " ".join(_text("planner/import.md").split("## Step 6", 1)[1].split())
+    assert "requesting person's next step" in imported
+    assert "status.md" in imported
+    assert "Do not send an unshared, unassigned draft straight to an admin" in imported
+    assert "The next step is to ask your" not in imported
+
+
+def test_roles_distinguish_setup_context_from_explicit_assignment():
+    text = " ".join(_text("roles/SKILL.md").split())
+    for phrase in (
+        "setup role statement is not a plan-assignment request",
+        "I am the Power Platform admin",
+        "src/skills/foundation-setup/SKILL.md",
+        "explicit assignment request",
+        "main chat",
+        "does not require completed environment setup",
+        "src/skills/planner/SKILL.md",
+    ):
+        assert phrase in text
+    assert "this is not a pre-setup experience" not in text
+
+
+def test_self_assignment_reuses_verified_identity_without_guessing_or_hidden_questions():
+    text = " ".join(_text("roles/resolve-person.md").split())
+    for phrase in (
+        "I", "me", "verified signed-in identity", "intended tenant",
+        "main chat", "first or partial name", "Leave unassigned for now",
+        "user is not available", "not an answer",
+        "Do not infer", "plan owner", "operating-system",
+        "do not write an assignment",
+    ):
+        assert phrase in text
+    assert "src/reference/ui-formatting-guidelines.md" in text
+
+
+def test_role_follow_ups_are_confirmed_requester_scoped_and_nonblocking():
+    attest = " ".join(_text("roles/attest.md").split())
+    assert "Only confirm an assignment after a successful shared result" in attest
+    assert "Reuse an explicit or already-confirmed role choice" in attest
+    assert "ask only when the mapping is ambiguous" in attest
+    for path in ("roles/attest.md", "roles/list.md"):
+        text = " ".join(_text(path).split())
+        assert "Refresh after progress" in text
+        assert "requesting person" in text
+    nudge = _text("roles/nudge.md")
+    assert "Active" in nudge
+    assert "unfinished work" in nudge
+    assert "> ## Your next step" in nudge
+    assert "not a blocking question" in nudge
+    assert "Who should be" not in nudge
+
+
+def test_signin_guidance_matches_the_bounded_transport_behavior():
+    text = " ".join(_text("planner/sync.md").split())
+    assert "does not automatically refresh and replay a rejected HTTP 401" in text
+    assert "not proof of a fresh browser sign-in" in text
+    assert "do not loop, change accounts automatically" in text
+    assert "renews in place" not in text
+
+
 def test_foundation_task_handoff_uses_setup_for_environment_and_installation():
     text = _text("planner/mytasks.md")
     for phrase in ("primaryEnvironment", "provisionedEnvironment", "essAgent"):
@@ -367,3 +492,30 @@ def test_lifecycle_entrypoints_bootstrap_before_shared_calls(entry):
     prose = " ".join(path.read_text(encoding="utf-8").split())
     assert "workspace bootstrap" in prose
     assert "before any shared tool call" in prose
+
+
+def test_bootstrap_recovers_missing_config_or_host_tools_after_success():
+    gate = " ".join(_text("planner/SKILL.md").split("## Gate", 1)[1].split("## First", 1)[0].split())
+    for phrase in (
+        "At the start of each request",
+        "If the file is missing",
+        "unavailable MCP connection",
+        "invalidate the earlier success",
+        "once for that failure",
+        "even if Planner already checked earlier",
+    ):
+        assert phrase in gate
+    assert "is not an unavailable MCP connection" in gate
+    assert "Preserve overrides" in gate
+
+
+def test_size_guidance_requires_export_and_stops_unchanged_retries():
+    text = " ".join(_text("planner/sync.md").split())
+    for phrase in (
+        "25,600 bytes", "aggregate UTF-8 preflight", "server-added",
+        "Do not retry unchanged", "Require a successful export",
+        "confirm the intended tenant/account", "never include access tokens",
+        "generic 500 without size evidence",
+    ):
+        assert phrase in text
+    assert text.index("PlanPayloadTooLarge / OpenTypeTooLarge") < text.index("Network error or 5xx")

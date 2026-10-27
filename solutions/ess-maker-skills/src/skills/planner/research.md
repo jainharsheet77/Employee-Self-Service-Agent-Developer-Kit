@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 Ground the Plan in **what ESS actually supports today**, using retrieved Microsoft
 Learn content and the kit's current checklists. The vendored snapshot under

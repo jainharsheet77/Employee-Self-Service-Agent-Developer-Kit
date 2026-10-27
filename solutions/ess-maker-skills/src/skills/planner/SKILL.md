@@ -36,6 +36,11 @@ share, or activate the plan and nominate owners instead.
 
 ## Communication rules (same as every kit skill)
 
+- Follow `src/reference/ui-formatting-guidelines.md` for every reply, including
+  **Next-step handoffs** and **Questions that need the maker**. Use its prominent
+  heading, bold action, and separate continuation line across all Planner flows,
+  not just activation. Select the action using `status.md`; formatting must not
+  change ownership, readiness, consent, or the truth of a save.
 - Prefer maker-facing terms: draft, shared plan, task, owner, and pending decision.
   Explain storage and permission boundaries honestly; do not hide a failed save
   or call a local-only change shared. Explain technical names when the host shows
@@ -111,7 +116,25 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
    authorize WorkIQ use, create/share a plan, or complete `/setup`. Respect
    local-only drafting; use WorkIQ only when the person-resolution flow needs it.
    Reuse successful command results from the same chat and workspace for later
-   turns or phases; do not rerun bootstrap for each request or phase handoff.
+   turns or phases only while configuration and host availability remain valid.
+   At the start of each request, before its first shared call, check that
+   `.vscode/mcp.json` still exists, run the two `validate` commands above, and check
+   that the MCP tools needed for this request are available.
+   If the file is missing, a required server entry is missing, or the host reports
+   an unavailable MCP connection, invalidate the earlier success and run
+   `materialize-defaults` plus both validation commands above once for that
+   failure. Do this even if Planner already checked earlier in the chat.
+   If configuration is valid but tools remain unavailable, perform one normal
+   host discovery/start/restart and recheck; explain any required trust approval.
+   Use this workspace's server definition, not an assumed global/plugin instance.
+   If still unavailable, stop shared calls and report the blocker, retaining
+   local drafting. Preserve overrides; do not regenerate repeatedly or replace
+   a custom server definition without approval.
+   A tool's backend response (401/403, validation, OpenTypeTooLarge, or HTTP 5xx)
+   is not an unavailable MCP connection. Use `sync.md` for those errors, not
+   rematerialization. A local-only draft does not require trust or tool startup.
+   Unavailable means the host cannot discover/connect to the MCP server, not a
+   tool returning an upstream API/network error.
    Never rely on an earlier session, a saved plan, or the persistent defaults
    state file as proof of this chat's check. If the workspace or MCP configuration
    changes, recheck. If no bootstrap attempt is recorded for this chat, run it now;
@@ -290,8 +313,8 @@ don't re-interview, rebuild the plan, or execute the recommended action.
 > the maker's workspace and shown to them; **storing it to the shared planner is an
 > explicit step the sponsor asks for** (`src/skills/planner/sync.md`), never an
 > automatic create on modelling. **Show the plan (download link + checklist) and
-> stop — but make the next steps explicit.** Close with a short, scannable **Next
-> steps** readout naming what the sponsor can do next: **edit** the plan, **share**
+> stop — but make the next steps explicit.** Close with a prominent `## Next steps`
+> roadmap naming what the sponsor can do next: **edit** the plan, **share**
 > it (store it to the shared space as a Draft) when it's ready, **activate** it, then
 > **assign the roles to people** once it's active. For Share and Activate, include
 > what the action does and an example natural-language prompt, using the readout
@@ -352,7 +375,8 @@ provide ownership, not new admin permissions.
 The download link and initial checklist make the plan reviewable. **Showing a
 newly created plan ends the turn: do not fire a blocking "what would you like to do next?" question
 and do not start assigning roles or editing on your own. But make the next steps
-explicit — close with a short, scannable "Next steps" readout, not a buried one-liner:
+explicit — use the prominent `## Next steps` roadmap from the communication rules,
+not a buried one-liner:
 (1) **edit** the plan or its assumed defaults (`src/skills/planner/edit.md`),
 (2) **share** it as a shared draft, (3) **activate** that shared draft explicitly
 (`src/skills/planner/sync.md`), and (4) **assign the roles to people** once it's

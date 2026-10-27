@@ -11,6 +11,10 @@ the phase files (interview, research, model, assign, evaluate, capture), the syn
 file (pull/push the plan with the shared planner), the Flow-2 "what am I
 assigned?" file, and the status/report file.
 
+Apply its **Communication rules** to every reply, including a prominent next-step
+heading, bold action, and separate continuation prompt or command. Keep required
+questions in the main chat, not a delegated execution flow.
+
 **This is the one experience allowed before setup.** The maker reached here by an
 **explicit** planning or existing-plan request (`/planner`, "plan a rollout",
 "create a plan", "edit this plan", "assign owners", "record task completion",
@@ -31,6 +35,9 @@ assignment, assigned tasks/completion, evaluations, and status. Materialize
 when a local draft already exists or tools are visible.
 Reuse successful results in the same chat and workspace for later turns or
 phases; follow the gate's recheck/failure rules. A prior session is not proof.
+If configuration is missing or the MCP connection is unavailable after an earlier
+check, follow the gate's bounded materialize/validate recovery. Do not confuse a
+backend API error with an unavailable MCP connection.
 For an explicit share/activate request, resume the saved plan and perform those
 actions through `sync.md`, sharing successfully before activation. Do not restart
 the interview or substitute a status-only response.

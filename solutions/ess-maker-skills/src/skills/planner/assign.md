@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 **Default to role-assigned; don't interview per task.** By the time you get here the plan
 is modelled with every Task grounded to a role. **Do not** walk the sponsor through a
@@ -11,8 +12,8 @@ over-interrogation the flow avoids. Instead, **assign every Task to its grounded
 (automatic, no questions) and **show the plan** (download link + checklist) — **locally;
 storing it to the shared space is an explicit step the sponsor asks for later**
 (`src/skills/planner/sync.md` → *Share*).
-Naming people to those roles is a **follow-up the sponsor opts into** — suggested in
-one short line after the plan is shown (`src/skills/planner/interview.md` → *After the
+Naming people to those roles is a **follow-up the sponsor opts into** — shown in
+the next-step roadmap after the plan (`src/skills/planner/interview.md` → *After the
 plan is shown*), never a blocking question you fire and never run before the sponsor
 asks. Leaving every role unassigned is a complete, valid end state.
 

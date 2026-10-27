@@ -14,6 +14,8 @@ pull/share/activate/sync request in a fresh chat. Reuse successful results in th
 same chat and workspace for later turns or phases, following the gate's
 recheck/failure rules. A saved plan, absent setup config, or already-visible
 Planner tools do not replace this chat's bootstrap.
+Apply the same skill's **Communication rules** to every reply and next-step
+handoff, including saves, activation, partial progress, and recovery.
 
 If configuration creation/validation fails, keep the local draft unchanged,
 report that error, and stop shared calls. Configuration, host discovery/trust,
@@ -45,30 +47,32 @@ failure. Bootstrap does not grant shared access or authorize plan mutations.
   JSON parser fails with *"Additional text encountered after finished reading
   JSON content"*. The CLI extracts the payload past that envelope for you.
 
-**Sign-in is the tool's job — never ask the sponsor whether to sign in.** Each
-planner tool authenticates itself, and on an expired/rejected token (a 401) it
-renews in place: silently when the refresh token is still good (no window), and
-otherwise by **opening a browser sign-in itself** and replaying the call once the
-sponsor finishes. That browser prompt is the *only* interaction sign-in ever needs —
-so you never diagnose it, never narrate the mechanism, never read any MCP/auth
-source to explain it, and above all **never present an `ask_user` / "how would you
-like to proceed?" choice about signing in.** Treat each call by walking this
-ladder **in order** — never cycle back up it:
+**Sign-in is the tool's job — never ask the sponsor whether to sign in.** A new
+Planner client acquires its configured credentials, opening browser sign-in when
+needed. The transport does not automatically refresh and replay a rejected HTTP
+401. Do not claim a new sign-in or token renewal happened unless it was observed.
+Never inspect MCP/auth source or credential stores during the maker flow, and
+never add a "how would you like to sign in?" interview. Walk this ladder **in
+order** — never cycle back up it:
 
-- **It succeeds** — possibly after a sign-in window appeared mid-call and the
+- **It succeeds** — possibly after a sign-in window appeared when connecting and the
   sponsor completed it. Expected; just carry on. Say nothing about sign-in.
-- **It still returns an explicit "sign in again" (HTTP 401)** after the tool's own
-  browser sign-in — the server can be wedged on a dead in-memory session that only a
-  fresh process clears. Take **one** mechanical recovery, then retry the same call
+- **PlanPayloadTooLarge / OpenTypeTooLarge, or a confirmed storage-size diagnosis**
+  — stop shared writes, even if the outer error says `InternalServerError`.
+  This is not transient. Do not retry unchanged, rotate idempotency keys, restart
+  MCP, or run `/setup` to work around it. Follow **Shared-record size budget**
+  below, keeping the complete local draft intact.
+- **It returns HTTP 401** — take **one** mechanical recovery, then retry the same call
   **once**: restart the `ess-planner` MCP server — run the editor's *MCP: Restart
-  Server* command yourself if that's available to you, otherwise tell the sponsor in
-  one plain line to run it (Command Palette → *MCP: Restart Server* → `ess-planner`).
-  The restart rebuilds the client and re-triggers a clean sign-in.
-- **It 401s again even after that restart + retry** — stop. Say one plain line —
+  Server* command yourself if that's available to you, otherwise give the sponsor
+  the prominent next-step handoff for Command Palette → *MCP: Restart Server* →
+  `ess-planner`. The restart reruns credential acquisition; it may reuse cached
+  credentials and is not proof of a fresh browser sign-in.
+- **It 401s again even after that restart + retry** — stop. Explain briefly —
   *"Your saved local copy is available; shared updates are unavailable right now.
   Pending completions will be retried when access returns."* Continue local drafting.
-  A 401 that survives a fresh sign-in and a
-  restart means the account can't reach the shared plan; nothing more you do helps.
+  Shared access is still unconfirmed; do not loop, change accounts automatically,
+  or infer the missing permission from the status code alone.
 - **Network error or 5xx** — use the local cache and explicitly say shared status
   could not be refreshed. Preserve pending completions; do not imply other edits
   are queued when no durable queue exists.
@@ -78,7 +82,9 @@ ladder **in order** — never cycle back up it:
   Re-read and reconcile a conflict with the maker; never auto-activate or replace
   a stored ETag and replay an offline write over someone else's edit.
 
-That single restart is the **only** mechanical recovery you ever take. Do **not**
+That single restart is the **only** sign-in recovery you ever take. Missing
+configuration or unavailable MCP tools use the separate **Gate** recovery, not
+this HTTP-error ladder. Do **not**
 clear or inspect token caches, read any MCP/auth source, check the token source, or
 reason about the client's internals — that is the spiral to avoid, not a path to a
 fix. The whole budget is: one 401 → at most one restart + one retry → then local.
@@ -92,6 +98,13 @@ These shared operations apply only after entry preflight and when the maker has
 accepted shared access.
 For an explicitly local-only draft or declined trust prompt, keep working locally
 and skip this flow until they ask for shared access.
+
+Use the authenticated tenant reported by MCP diagnostics when tracing a failure,
+not an assumed tenant from an earlier conversation. If it differs from the maker's
+intended tenant, stop writes and confirm the intended tenant/account through the
+normal sign-in flow before continuing. Do not change tenant IDs in configuration
+to match telemetry or inspect/edit token caches. Correlate the actual tenant,
+project, request IDs, and failure time; never include access tokens.
 
 Every plan lives under the ESS project. Get-or-create it — the call is
 idempotent, so it's safe to run on every entry:
@@ -160,6 +173,33 @@ listed separately as `pendingOutputs`, not sent to a completion endpoint.
 This is what makes a completion that failed to push last time
 reach the shared plan on the next successful entry.
 
+## Shared-record size budget
+
+ESS limits one stored plan record to **25,600 bytes**, including server-added
+metadata. Per-field lengths, context count, and the size of the entire HTTP body
+are not sufficient checks. Context and acceptance criteria share the plan record;
+inline tasks are separate records. Shrinking task descriptions alone does not
+fix oversized plan context.
+
+Before a create or metadata update, use a fresh
+`python scripts/planner/cli.py export-remote-plan` result. The export and MCP share
+an aggregate UTF-8 preflight with conservative metadata headroom. Export can pack
+generated workstream labels losslessly into bounded scalar maps; do not hand-edit
+those carriers. Existing workstream entries remain readable.
+
+If export fails, there is no sendable body. Preserve the full local draft and
+review a concise shared version: state common assumptions once, remove repeated
+boilerplate, and shorten redundant descriptions. Preserve scenario scope,
+dependencies, ownership, authorization/confirmation rules, and evaluation
+expectations. Do not truncate fields, silently discard requirements, or claim a
+local attachment is accessible to colleagues. Confirm semantic changes before
+sharing. Re-export and proceed only when the check passes.
+
+The preflight is a conservative client budget, not the exact service serializer.
+If the backend still reports `OpenTypeTooLarge`, retain the diagnostic and stop
+unchanged retries; server-side aggregate validation and a clear error remain
+necessary. A generic 500 without size evidence must not be labelled a size error.
+
 ## Share — store a newly authored plan to the shared planner (explicit)
 
 **The first store is an explicit step the sponsor asks for — never automatic.** A
@@ -188,10 +228,16 @@ model), store it in **one** create call rather than task-by-task:
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).
+   Require a successful export before calling MCP. It checks the final aggregate
+   budget, including generated metadata, and packs workstream labels losslessly
+   when needed. Use this freshly exported body verbatim, never an older oversized
+   body or raw `plan.json`.
 3. **Store it (the plan is created in Draft):** call **`create_project_plan`**
    with the `projectId`, that body, and an **`idempotencyKey`**. Generate the key
    once when the share starts (a fresh UUID) and treat it as belonging to this
-   draft — reuse the *exact same* key on every retry of this same store. Keying
+   exact request body — reuse the *exact same* key on a safe retry of the unchanged
+   store. A changed body requires readback/reconciliation of the failed attempt
+   before a new keyed create; never rotate keys merely to bypass an error. Keying
    the create is what makes a retry safe: the service collapses a replay onto the
    same plan instead of creating a duplicate. (An **unkeyed** create is
    deliberately *not* auto-retried, because a blind replay could duplicate the
@@ -216,6 +262,9 @@ model), store it in **one** create call rather than task-by-task:
    the backend) and re-surface the downloadable *ESS scenario plan* link if helpful
    (the `summary` command prints the exact `📄 [ESS-scenario-plan.md](…)` line). A
    Draft's tasks are **read-only** until it's Active, so name the next step:
+   render the chosen action with the shared next-step heading, bold action, and
+   separate prompt, not as an inline sentence. The branches below guide the
+   response; they are not a blocking menu.
    - **Activate the plan** — make this the active rollout plan so owners can start
      ready tasks and record progress. This does not run tasks or deploy ESS
      automatically. **Prompt:** "Activate this plan." Go to step 6 only when the
@@ -250,6 +299,7 @@ model), store it in **one** create call rather than task-by-task:
    the tasks that must wait, while unrelated ready work can proceed.
 
    **Then refresh the maker's next step.** Use `status.md` → **Refresh after progress**.
+   Use its prominent activation handoff with the actual saved state.
    If required roles for unfinished work are still vacant, recommend assigning
    them (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`). Do not
    recommend activation again or ask them to repeat assignments already recorded.

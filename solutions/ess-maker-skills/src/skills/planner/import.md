@@ -3,6 +3,7 @@
 > **Planner session entry:** Follow `src/skills/planner/SKILL.md` -> **Gate**
 > for the workspace bootstrap on first Planner use. Reuse its successful result
 > in the same chat and workspace before continuing this flow.
+> Apply its **Communication rules** to every reply and next-step handoff.
 
 Sometimes the maker doesn't want to start from a blank interview — they already
 have a plan. They attach it (a doc, a spreadsheet exported to text, a pasted
@@ -267,12 +268,12 @@ to share it.
 the maker opts into after the plan is shown** (`src/skills/planner/interview.md` →
 *After the plan is shown*); editing follows `edit.md`.
 
-Then tell the maker the **one next step** that unblocks the rollout — usually
-handing off to whoever owns setup:
-
-> Your plan's ready and saved. The next step is to ask your **Power Platform
-> Admin** to run setup so we can ground it in a real environment — after that the
-> connect and authoring tasks open up for the people you assigned.
+Choose the requesting person's next step using `status.md` and the communication
+rules, exactly as for a newly created plan. A local draft normally needs review
+and explicit sharing, followed by activation and nominations when requested.
+Do not send an unshared, unassigned draft straight to an admin or imply imported
+role labels are confirmed people. Recommend `/setup` only when this requester's
+own eligible work and the current lifecycle call for it.
 
 Never mention files, JSON, the CLI, or these skills to the maker — speak only in
 terms of their plan, its scenarios, and the tasks.

@@ -195,6 +195,41 @@ def test_setup_retains_task_context_and_accepts_natural_language() -> None:
     assert "Do not restart persona detection" in scope
 
 
+def test_setup_role_statement_does_not_start_a_plan_identity_interview() -> None:
+    text = " ".join(_FOUNDATION.read_text(encoding="utf-8").split())
+    for phrase in (
+        "A setup role statement is not a plan-assignment request",
+        "I am the Power Platform admin",
+        "Do not require a name or work email",
+        "do not call role-attestation tools",
+        "sign-in and environment-access checks",
+        "main chat",
+    ):
+        assert phrase in text
+
+
+def test_required_questions_stay_in_main_chat_and_unavailable_is_not_consent() -> None:
+    text = " ".join(_UI_FORMATTING_GUIDELINES.read_text(encoding="utf-8").split())
+    for phrase in (
+        "The main chat owns questions",
+        "subagent",
+        "return the missing question",
+        "user is not available",
+        "not an answer",
+        "not consent",
+        "Do not choose a person, tenant, environment",
+        "do not retry the unavailable question in a loop",
+    ):
+        assert phrase in text
+
+
+def test_standalone_setup_handoff_has_a_prominent_next_step() -> None:
+    handoff = (_FOUNDATION.parent / "handoff.md").read_text(encoding="utf-8")
+    standalone = handoff.split("**Without a plan task", 1)[1]
+    assert "## Your next step\n\n**Connect your first system.**" in standalone
+    assert "**Run:** `/connect`" in standalone
+
+
 def test_setup_passes_verified_environment_id_to_extraction() -> None:
     text = _ONBOARDING_STEP2.read_text(encoding="utf-8")
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
