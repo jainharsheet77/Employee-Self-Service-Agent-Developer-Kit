@@ -36,6 +36,11 @@ import copy
 import json
 from typing import Any
 
+from planner_payload import (
+    PLAN_STORAGE_LIMIT_BYTES,
+    ensure_plan_payload_fits,
+    measure_plan_payload,
+)
 from planner.attestable import ATTESTABLE_ROLE_WIRE_NAMES, resolve_attestable_role_id
 from planner.plan_model import (
     ACCEPTANCE_GROUP,
@@ -43,6 +48,8 @@ from planner.plan_model import (
     PLAN_STATES,
     SCHEMA_VERSION,
     STREAM_GROUP,
+    STREAM_MAP_GROUP,
+    Limits,
     Plan,
     assignee_role_id,
     assignee_user_oid,
@@ -59,11 +66,92 @@ from planner.plan_model import (
 # keyed by ``"<prefix><task title>"``. The title is the join key because the service
 # reassigns task ids on push (``to_remote_task_body`` drops the local id), so the
 # title is the only task identity that survives the round-trip; ``to_remote_plan_body``
-# refuses to export when a streamed task's title is not unique, so the carrier can't
-# silently spill one task's stream onto a namesake. ``hydrate_from_remote`` reattaches
-# it to the task by title and drops the carrier entry, so the grouped task view
-# survives a publish/pull cycle without leaking an internal group into the local plan.
+# refuses ambiguous titles. When individual carriers exceed the export budget,
+# versioned scalar maps preserve the same labels with fewer server-stamped entries.
+# Both forms hydrate by title; older clients preserve the unfamiliar map group as
+# ordinary context, which this exporter can recover on a later round-trip.
 _STREAM_KEY_PREFIX = "stream:"
+_STREAM_MAP_KEY_PREFIX = "streams.v1."
+
+
+def _merge_streams(destination: dict[str, str], streams: dict[str, str]) -> None:
+    for title, stream in streams.items():
+        if title in destination and destination[title] != stream:
+            raise ValueError("Conflicting workstream metadata for the same task title.")
+        destination[title] = stream
+
+
+def _decode_stream_map(key: str, value: Any) -> dict[str, str]:
+    if not isinstance(key, str) or not key.startswith(_STREAM_MAP_KEY_PREFIX):
+        raise ValueError("Unsupported workstream map version; update the kit before editing this plan.")
+    if not isinstance(value, str):
+        raise ValueError("Workstream map must be a JSON string.")
+
+    def unique_pairs(pairs):
+        result = {}
+        for title, stream in pairs:
+            if title in result:
+                raise ValueError("Duplicate task title in workstream map.")
+            result[title] = stream
+        return result
+
+    try:
+        streams = json.loads(value, object_pairs_hook=unique_pairs)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid workstream map JSON; the plan was not replaced.") from exc
+    if not isinstance(streams, dict) or not streams or any(
+        not isinstance(title, str) or not title.strip()
+        or not isinstance(stream, str) or not stream.strip()
+        for title, stream in streams.items()
+    ):
+        raise ValueError("Workstream map must contain non-empty task titles and stream labels.")
+    return streams
+
+
+def _packed_stream_context(streams: dict[str, str]) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    chunk: dict[str, str] = {}
+
+    def encode(value):
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    def emit():
+        entries.append({
+            "key": f"{_STREAM_MAP_KEY_PREFIX}{len(entries)}",
+            "value": encode(chunk),
+            "group": STREAM_MAP_GROUP,
+        })
+
+    for title, stream in sorted(streams.items()):
+        candidate = {**chunk, title: stream}
+        if len(encode(candidate)) > Limits.MAX_VALUE_LEN:
+            if not chunk:
+                raise ValueError("Workstream metadata is too long; shorten the task title or stream label.")
+            emit()
+            candidate = {title: stream}
+            if len(encode(candidate)) > Limits.MAX_VALUE_LEN:
+                raise ValueError("Workstream metadata is too long; shorten the task title or stream label.")
+        chunk = candidate
+    if chunk:
+        emit()
+    return entries
+
+
+def _validate_export_context(context: list[dict[str, Any]]) -> None:
+    if len(context) > Limits.MAX_CONTEXT_ENTRIES:
+        raise ValueError(
+            f"Shared export exceeds the kit's {Limits.MAX_CONTEXT_ENTRIES}-entry context budget "
+            "after generated metadata. Consolidate redundant context without dropping requirements."
+        )
+    seen: set[str] = set()
+    for entry in context:
+        key = entry.get("key")
+        if not isinstance(key, str) or not key or key in seen or len(key) > Limits.MAX_KEY_LEN:
+            raise ValueError("Shared context keys must be unique, non-empty, and within the key limit.")
+        seen.add(key)
+        value = entry.get("value")
+        if isinstance(value, (dict, list)) or len(str(value)) > Limits.MAX_VALUE_LEN:
+            raise ValueError("Shared context values must be scalar and within the value limit.")
 
 # The service's PlanTaskState enum, in declaration order (so an integer wire
 # value can be resolved positionally). Only ``Cancelled`` differs from the local
@@ -270,6 +358,7 @@ def to_remote_plan_body(
 
     acceptance: list[str] = []
     context: list[dict[str, Any]] = []
+    carried_streams: dict[str, str] = {}
     for entry in plan.context:
         if entry.get("group") == ACCEPTANCE_GROUP:
             acceptance.append(entry.get("value"))
@@ -277,6 +366,12 @@ def to_remote_plan_body(
         # Stream carriers are re-derived from the tasks below, so never echo a
         # stale one back (keeps the round-trip idempotent).
         if entry.get("group") == STREAM_GROUP:
+            continue
+        if entry.get("group") == STREAM_MAP_GROUP:
+            _merge_streams(
+                carried_streams,
+                _decode_stream_map(entry.get("key", ""), entry.get("value")),
+            )
             continue
         item: dict[str, Any] = {"key": entry.get("key"), "value": entry.get("value")}
         group = entry.get("group")
@@ -301,9 +396,10 @@ def to_remote_plan_body(
         title = (task.get("title") or "").strip()
         if title:
             title_counts[title] = title_counts.get(title, 0) + 1
+    streams: dict[str, str] = {}
     for task in plan.tasks:
-        stream = (task.get("stream") or "").strip()
         title = (task.get("title") or "").strip()
+        stream = (task.get("stream", carried_streams.get(title)) or "").strip()
         if not stream or not title:
             continue
         if title_counts[title] > 1:
@@ -313,17 +409,30 @@ def to_remote_plan_body(
                 "round-trips by title; give these tasks distinct titles before "
                 "pushing so their grouping can't be silently merged"
             )
-        context.append({
-            "key": f"{_STREAM_KEY_PREFIX}{title}",
-            "value": stream,
-            "group": STREAM_GROUP,
-        })
+        streams[title] = stream
 
     body: dict[str, Any] = {"configuringAgentName": name}
     if acceptance:
         body["acceptanceCriteria"] = acceptance
+    ordinary_context = context
+    context = ordinary_context + [
+        {"key": f"{_STREAM_KEY_PREFIX}{title}", "value": stream, "group": STREAM_GROUP}
+        for title, stream in streams.items()
+    ]
     if context:
         body["context"] = context
+    if streams and (
+        len(context) > Limits.MAX_CONTEXT_ENTRIES
+        or any(
+            isinstance(entry.get("key"), str) and len(entry["key"]) > Limits.MAX_KEY_LEN
+            for entry in context
+        )
+        or measure_plan_payload(body).estimated_bytes > PLAN_STORAGE_LIMIT_BYTES
+    ):
+        context = ordinary_context + _packed_stream_context(streams)
+        body["context"] = context
+    _validate_export_context(context)
+    ensure_plan_payload_fits(body)
     tasks = [to_remote_task_body(task) for task in plan.tasks]
     if tasks:
         body["tasks"] = tasks
@@ -536,6 +645,12 @@ def hydrate_from_remote(
         if not isinstance(entry, dict):
             continue
         group = _scalar(entry, "group", "Group", default="")
+        if group == STREAM_MAP_GROUP:
+            _merge_streams(task_streams, _decode_stream_map(
+                _scalar(entry, "key", "Key", default=""),
+                _scalar(entry, "value", "Value", default=None),
+            ))
+            continue
         # Stream carriers are an internal round-trip vehicle, not maker context:
         # capture them (title -> stream) to reattach to tasks below, then drop them
         # so the local plan never carries the ``taskStream`` group.
@@ -544,7 +659,7 @@ def hydrate_from_remote(
             title = key[len(_STREAM_KEY_PREFIX):] if key.startswith(_STREAM_KEY_PREFIX) else key
             stream = _scalar(entry, "value", "Value", default="")
             if title and stream:
-                task_streams[title] = stream
+                _merge_streams(task_streams, {title: stream})
             continue
         context.append(
             context_entry(

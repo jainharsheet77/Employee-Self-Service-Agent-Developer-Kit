@@ -1007,3 +1007,133 @@ def test_keyed_create_is_retried_on_ambiguous_5xx(monkeypatch) -> None:
     posts = [r for r in calls if r.method == "POST"]
     assert len(posts) == 2  # an Idempotency-Key makes the create retry-safe
     assert all("Idempotency-Key" in p.headers for p in posts)
+
+
+@pytest.mark.parametrize(
+    "value,count", [("x" * 170, 65), ("\u6f22" * 1000, 9)],
+    ids=["metadata-overhead", "utf8-not-characters"],
+)
+def test_create_rejects_aggregate_metadata_before_post(monkeypatch, value, count):
+    def handler(request):
+        raise AssertionError("oversized metadata must never reach the service")
+
+    client = _make_client(monkeypatch, handler)
+    body = {
+        "configuringAgentName": "EmployeeSelfServiceHRDA",
+        "context": [{"key": f"scope.{i}", "value": value} for i in range(count)],
+    }
+    with pytest.raises(ValueError, match="PlanPayloadTooLarge") as excinfo:
+        _run(client, lambda: client.create_project_plan("proj1", body, "idem"))
+    assert "25,600" in str(excinfo.value)
+    assert TENANT_ID in str(excinfo.value)
+    assert _token() not in str(excinfo.value)
+
+
+def test_context_patch_checks_combined_record_before_writing(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        assert request.method == "GET", "combined oversized update must not be sent"
+        return httpx.Response(200, json={
+            "PlanId": "plan1",
+            "Context": [{"key": f"scope.{i}", "value": "x" * 110} for i in range(50)],
+        })
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="PlanPayloadTooLarge"):
+        _run(client, lambda: client.update_project_plan(
+            "proj1", "plan1", {"acceptanceCriteria": ["y" * 1900] * 3}, "caller-etag",
+        ))
+    assert len(calls) == 1
+
+
+def test_metadata_patch_preserves_original_etag_and_body(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={
+                "PlanId": "plan1", "Context": [{"key": "scope", "value": "old"}],
+                "AcceptanceCriteria": ["Reviewed"], "ETag": "server-etag",
+            })
+        return httpx.Response(200, json={"PlanId": "plan1"})
+
+    client = _make_client(monkeypatch, handler)
+    patch = {"context": [{"key": "scope", "value": "updated"}]}
+    _run(client, lambda: client.update_project_plan("proj1", "plan1", patch, "caller-etag"))
+    assert [call.method for call in calls] == ["GET", "PATCH"]
+    assert json.loads(calls[1].content) == patch
+    assert calls[1].headers["If-Match"] == "caller-etag"
+
+
+def test_known_storage_error_has_actionable_guidance_and_scope(monkeypatch):
+    calls = []
+    request_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(500, headers={"request-id": request_id}, json={
+            "Code": "InternalServerError", "Message": "The operation failed.",
+            "Details": [{"Code": "OpenTypeTooLarge", "Message": "Record exceeds storage limit."}],
+        })
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}, "idem",
+        ))
+    message = str(excinfo.value)
+    assert "25,600" in message
+    assert "Do not retry unchanged" in message
+    assert "HTTP 500" in message and TENANT_ID in message
+    assert request_id in message
+    assert len(calls) == 1
+
+
+def test_generic_server_error_keeps_diagnostics_without_guessing_size(monkeypatch):
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(500, headers={"Authorization": "do-not-display"}, json={
+            "Code": "InternalServerError", "Message": "The operation failed.",
+        })
+
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"}, "idem",
+        ))
+    message = str(excinfo.value)
+    assert "HTTP 500" in message and TENANT_ID in message
+    assert calls[0].headers["client-request-id"] in message
+    assert "OpenTypeTooLarge" not in message and "PlanPayloadTooLarge" not in message
+    assert "do-not-display" not in message and _token() not in message
+    assert len(calls) == 1
+
+
+def test_rejected_token_is_reported_without_automatic_replay(monkeypatch):
+    calls, handler = _recorder({"Code": "Unauthorized", "Message": "Sign-in required."}, status=401)
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(base_client_module.AgentConfigApiError) as error:
+        _run(client, lambda: client.list_project_plans("proj1"))
+    assert error.value.http_status == 401
+    assert "HTTP 401" in str(error.value)
+    assert len(calls) == 1
+
+
+def test_completion_metadata_counts_utf8_bytes_before_sending(monkeypatch):
+    def handler(request):
+        raise AssertionError("oversized Unicode output must not reach the service")
+
+    client = _make_client(monkeypatch, handler)
+    outputs = [{
+        "key": "result", "kind": "Custom",
+        "attributes": [{"key": f"field.{i}", "value": "\u6f22" * 1000} for i in range(8)],
+    }]
+    with pytest.raises(ValueError, match="completion outputs are too large"):
+        _run(client, lambda: client.complete_project_plan_task(
+            "proj1", "plan1", "task1", outputs, "etag",
+        ))

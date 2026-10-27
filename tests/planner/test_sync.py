@@ -18,6 +18,8 @@ from planner import cli, sync
 from planner.plan_model import (
     ACCEPTANCE_GROUP,
     STREAM_GROUP,
+    STREAM_MAP_GROUP,
+    Limits,
     Plan,
     new_task,
     plan_artifact,
@@ -479,6 +481,122 @@ def test_export_rejects_duplicate_streamed_title():
     plan.add_task(new_task("t2", "Configure Workday"))  # same title, poisons the carrier
     with pytest.raises(ValueError, match="distinct titles"):
         sync.to_remote_plan_body(plan)
+
+
+def _large_streamed_plan():
+    plan = Plan.new(objective="Synthetic rollout")
+    plan.set_configuring_agent_name(HR_AGENT)
+    plan.set_context("acceptance.1", "Review the rollout", group=ACCEPTANCE_GROUP)
+    for index in range(45):
+        plan.set_context(f"scope.{index}", "x" * 150, group="scope")
+    for index in range(19):
+        plan.add_task(new_task(
+            f"t{index}", f"Scenario task {index}", stream=f"Stream {index % 4}",
+        ))
+    return plan
+
+
+def test_export_compacts_workstreams_without_losing_plan_content():
+    plan = _large_streamed_plan()
+    before = json.dumps(plan.data, sort_keys=True)
+    assert len(plan.context) == 47
+    assert plan.validate() == []
+    body = sync.to_remote_plan_body(plan)
+    assert len(body["context"]) <= 64
+    ordinary = [entry for entry in body["context"] if entry.get("group") == "scope"]
+    assert len(ordinary) == 45
+    assert all(entry["value"] == "x" * 150 for entry in ordinary)
+    echoed_tasks = [dict(task, taskId=f"srv-{i}") for i, task in enumerate(body["tasks"])]
+    hydrated = Plan(sync.hydrate_from_remote(
+        {"planId": "remote", **body}, {"value": echoed_tasks},
+    ))
+    assert [(task["title"], task.get("stream")) for task in hydrated.tasks] == [
+        (task["title"], task.get("stream")) for task in plan.tasks
+    ]
+    assert sync.to_remote_plan_body(hydrated) == body
+    assert json.dumps(plan.data, sort_keys=True) == before
+
+
+def test_compact_maps_survive_an_older_readers_context_roundtrip():
+    plan = _large_streamed_plan()
+    body = sync.to_remote_plan_body(plan)
+    maps = [entry for entry in body["context"] if entry.get("group") == STREAM_MAP_GROUP]
+    assert maps
+    for task in plan.tasks:
+        task.pop("stream")
+    plan.data["context"].extend(maps)
+    assert sync.to_remote_plan_body(plan) == body
+    plan.tasks[0]["stream"] = ""
+    edited = sync.to_remote_plan_body(plan)
+    hydrated = sync.hydrate_from_remote(
+        edited, {"value": [dict(task, taskId=str(i)) for i, task in enumerate(edited["tasks"])]},
+    )
+    assert not hydrated["tasks"][0].get("stream")
+
+
+def test_compact_maps_chunk_at_the_scalar_value_limit():
+    plan = Plan.new(objective="Synthetic rollout")
+    plan.set_configuring_agent_name(HR_AGENT)
+    for index in range(39):
+        plan.set_context(f"scope.{index}", "Scoped outcome", group="scope")
+    for index in range(25):
+        plan.add_task(new_task(
+            str(index), f"Task {index:02} " + "t" * 80, stream="Workstream " + "s" * 30,
+        ))
+    body = sync.to_remote_plan_body(plan)
+    maps = [entry for entry in body["context"] if entry.get("group") == STREAM_MAP_GROUP]
+    assert len(maps) > 1
+    assert all(len(entry["value"]) <= Limits.MAX_VALUE_LEN for entry in maps)
+    restored = sync.hydrate_from_remote(
+        body, {"value": [dict(task, taskId=str(i)) for i, task in enumerate(body["tasks"])]},
+    )
+    assert [(task["title"], task["stream"]) for task in restored["tasks"]] == [
+        (task["title"], task["stream"]) for task in plan.tasks
+    ]
+
+
+@pytest.mark.parametrize("value", ['{"Task":"A","Task":"B"}', "invalid", '{"Task":42}'])
+def test_invalid_compact_metadata_is_not_silently_lost(value):
+    with pytest.raises(ValueError, match="workstream|Workstream|Duplicate"):
+        sync.hydrate_from_remote({
+            "planId": "plan",
+            "context": [{"key": "streams.v1.0", "group": STREAM_MAP_GROUP, "value": value}],
+        }, {"value": []})
+
+
+@pytest.mark.parametrize("key", [None, 42, "streams.v2.0"])
+def test_invalid_compact_map_key_has_an_actionable_error(key):
+    with pytest.raises(ValueError, match="Unsupported workstream map version"):
+        sync.hydrate_from_remote({
+            "planId": "plan",
+            "context": [{"key": key, "group": STREAM_MAP_GROUP, "value": '{"Task":"Setup"}'}],
+        }, {"value": []})
+
+
+def test_export_rejects_aggregate_metadata_with_valid_individual_fields():
+    plan = Plan.new(objective="Synthetic rollout")
+    plan.set_configuring_agent_name(HR_AGENT)
+    for index in range(24):
+        plan.set_context(f"scope.{index}", "x" * 1000, group="scope")
+    assert plan.validate() == []
+    with pytest.raises(ValueError, match="PlanPayloadTooLarge"):
+        sync.to_remote_plan_body(plan)
+
+
+def test_cli_oversized_export_keeps_both_draft_files(tmp_path, capsys):
+    plan = Plan.new(objective="Synthetic rollout")
+    plan.set_configuring_agent_name(HR_AGENT)
+    for index in range(24):
+        plan.set_context(f"scope.{index}", "x" * 1000, group="scope")
+    path = tmp_path / "plan.json"
+    plan.save_all(path)
+    files = [path, path.with_name("ESS-scenario-plan.md")]
+    before = {file: file.read_bytes() for file in files}
+    assert _run("--plan", str(path), "export-remote-plan") == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "PlanPayloadTooLarge" in output.err
+    assert {file: file.read_bytes() for file in files} == before
 
 
 def test_export_accepts_legacy_cea_agent_name():

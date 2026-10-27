@@ -225,7 +225,12 @@ async def create_project_plan(
     Wait for explicit sharing consent and a resolved target before calling.
     Then optional ownedById?, acceptanceCriteria?, context?, and
     tasks? (inline tasks are created atomically with the plan, max 50). Unknown
-    fields are rejected (400). New plans start in Draft."""
+    fields are rejected (400). New plans start in Draft. Aggregate plan metadata
+    is checked against the 25,600-byte record budget with client headroom for
+    server-added fields. Use the latest export-remote-plan body; it can compact
+    generated workstream metadata without dropping intent. PlanPayloadTooLarge
+    or OpenTypeTooLarge is not transient: do not retry unchanged or rotate keys
+    to bypass it. Confirm the intended tenant if diagnostics report a mismatch."""
     return _format(
         await get_client().create_project_plan(projectId, plan, idempotencyKey)
     )
@@ -248,7 +253,10 @@ async def update_project_plan(
     activation request; a status question is not consent.
     Requires the plan's current ETag; if
     it is stale the call fails with an actionable 412 telling you to re-read the
-    plan and reapply your change (the write is never silently replayed)."""
+    plan and reapply your change (the write is never silently replayed).
+    Metadata edits are size-checked against the current record, not just the
+    patch, while retaining the caller's ETag. PlanPayloadTooLarge/OpenTypeTooLarge
+    requires reducing redundant metadata and re-exporting, not unchanged retries."""
     return _format(
         await get_client().update_project_plan(projectId, planId, patch, etag)
     )

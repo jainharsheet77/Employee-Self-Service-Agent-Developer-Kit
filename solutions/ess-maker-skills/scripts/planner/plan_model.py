@@ -138,6 +138,7 @@ PENDING_DECISION_GROUP = "pendingDecision"
 # stripped from Context on import — keeping the grouped task view stable across a
 # publish/pull cycle. Never surfaced to the maker (see ``_STRUCTURED_GROUPS``).
 STREAM_GROUP = "taskStream"
+STREAM_MAP_GROUP = "taskStreamMap"
 
 # A maker-uploaded task owner that doesn't resolve to a closed attestable role is
 # kept here (not on the assignment, which the service would reject on publish) so
@@ -161,6 +162,7 @@ _STRUCTURED_GROUPS = frozenset(
         PENDING_DECISION_GROUP,
         DEPENDS_ON_GROUP,
         STREAM_GROUP,
+        STREAM_MAP_GROUP,
     }
 )
 
