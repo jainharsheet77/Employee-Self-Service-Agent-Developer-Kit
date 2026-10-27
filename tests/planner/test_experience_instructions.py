@@ -434,6 +434,60 @@ def test_native_planner_discovers_existing_plan_lifecycle_requests():
         assert phrase in metadata
 
 
+def test_planner_intent_is_checked_before_orientation_bootstrap_and_resume():
+    text = _text("planner/SKILL.md")
+    assert text.index("## Intent gate") < text.index("## Orient the maker") < text.index("## Gate")
+    gate = " ".join(text.split("## Intent gate", 1)[1].split("\n## ", 1)[0].split())
+    for phrase in (
+        "current user request",
+        "passive context is not intent",
+        "open or attached `plan.json`",
+        "Do not inspect or resume a plan",
+        "materialize Planner MCPs",
+        "discover tools",
+        "request shared access",
+        "greeting does not answer",
+        "do not add a confirmation turn",
+    ):
+        assert phrase in gate
+    bootstrap = " ".join(text.split("## Gate", 1)[1].split("## First", 1)[0].split())
+    assert "not the first message in every chat" in bootstrap
+    assert "does not relax other skills' setup requirements" in bootstrap
+
+
+@pytest.mark.parametrize(("message", "context", "route"), [
+    ("Hi", "`plan.json` is open", "Normal welcome"),
+    ("Hello", "A plan is attached", "Normal welcome"),
+    ("Thanks", "A plan is active", "Acknowledge"),
+    ("What does /planner do?", "Any", "Explain"),
+    ("Share and activate it", "A saved plan supplies the target", "Planner"),
+    ("Show my plan status", "A saved plan supplies the target", "Planner"),
+    ("Hi, show my plan status", "A saved plan supplies the target", "Planner"),
+    ("Yes", "Reply to an offered Planner action", "Planner"),
+    ("Workday", "Reply to the current Planner system question", "Planner"),
+])
+def test_intent_examples_distinguish_context_from_requested_work(message, context, route):
+    rows = _text("planner/SKILL.md").splitlines()
+    row = next(line for line in rows if line.startswith(f'| "{message}" | {context} |'))
+    assert row.split("|")[3].strip().startswith(route)
+    if route != "Planner":
+        assert "no Planner tools" in row
+
+
+@pytest.mark.parametrize("entry", ["native", "prompt", "sync"])
+def test_direct_entries_admit_intent_before_workspace_bootstrap(entry):
+    path = {
+        "native": SKILLS.parents[1] / ".github" / "skills" / "planner" / "SKILL.md",
+        "prompt": SKILLS.parents[1] / ".github" / "prompts" / "planner.prompt.md",
+        "sync": SKILLS / "planner" / "sync.md",
+    }[entry]
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    assert text.index("Intent gate") < text.index("workspace bootstrap")
+    assert '"Hi"' in text
+    assert "passive" in text
+    assert "A saved local plan in a fresh chat is enough context" not in text
+
+
 def test_existing_draft_and_visible_tools_do_not_skip_workspace_bootstrap():
     text = _text("planner/SKILL.md")
     gate, resume = text.split("## Gate", 1)[1].split("## First", 1)
@@ -475,6 +529,7 @@ def test_planner_bootstrap_is_reused_across_flows_but_not_across_chats():
 def test_every_planner_phase_enters_through_the_shared_chat_bootstrap(phase):
     entry = " ".join(_text(f"planner/{phase}").splitlines()[:18])
     assert "src/skills/planner/SKILL.md" in entry
+    assert "Intent gate" in entry
     assert "Gate" in entry
     assert "workspace bootstrap" in entry
     assert "first Planner use" in entry

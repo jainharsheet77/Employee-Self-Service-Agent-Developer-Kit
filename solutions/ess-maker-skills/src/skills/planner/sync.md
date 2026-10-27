@@ -8,6 +8,8 @@ authored plan as one object.
 
 ## Entry preflight
 
+Apply `src/skills/planner/SKILL.md` -> **Intent gate** first. "Hi" or passive
+`plan.json` context alone is not permission; stop without bootstrap or shared tools.
 Complete the **workspace bootstrap before any shared tool call**. Follow
 `src/skills/planner/SKILL.md` -> **Gate** on first Planner use, including a direct
 pull/share/activate/sync request in a fresh chat. Reuse successful results in the
@@ -106,8 +108,9 @@ normal sign-in flow before continuing. Do not change tenant IDs in configuration
 to match telemetry or inspect/edit token caches. Correlate the actual tenant,
 project, request IDs, and failure time; never include access tokens.
 
-Every plan lives under the ESS project. Get-or-create it — the call is
-idempotent, so it's safe to run on every entry:
+Every plan lives under the ESS project. For an admitted request needing shared
+access, get-or-create it. Idempotence makes replay safe; it is not authorization
+to start this flow, and the call can create a project when none exists:
 
 - Call **`create_agent_configuration_project`** with `{"name": "Employee Self-Service"}`.
 - Keep the returned **`projectId`** (and its `etag`); you need `projectId` for

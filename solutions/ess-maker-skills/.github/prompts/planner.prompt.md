@@ -11,15 +11,22 @@ the phase files (interview, research, model, assign, evaluate, capture), the syn
 file (pull/push the plan with the shared planner), the Flow-2 "what am I
 assigned?" file, and the status/report file.
 
+Apply its **Intent gate** before any Planner work. A user-typed `/planner` or a
+clear plan action admits the flow; loading this prompt does not prove either.
+Without a requested action, "Hi", general help, or passive open/attached
+`plan.json` context gets the normal response; stop without Planner bootstrap,
+shared calls, or permission prompts.
+
 Apply its **Communication rules** to every reply, including a prominent next-step
 heading, bold action, and separate continuation prompt or command. Keep required
 questions in the main chat, not a delegated execution flow.
 
-**This is the one experience allowed before setup.** The maker reached here by an
-**explicit** planning or existing-plan request (`/planner`, "plan a rollout",
+**This is the one experience allowed before setup, after intent is admitted.**
+The maker must have made an **explicit** planning or existing-plan request
+(`/planner`, "plan a rollout",
 "create a plan", "edit this plan", "assign owners", "record task completion",
 "share and activate the plan", "resume my plan") or
-by choosing "Plan your ESS rollout" from the first-run setup gate — either way,
+chosen "Plan your ESS rollout" from the first-run setup gate — either way,
 proceed with planning. On a brand-new tenant nothing is
 set up yet — planning is how the rollout is decided — so do not block on
 `.local/config.json` being `"complete"`. Read it if it exists (to reuse the

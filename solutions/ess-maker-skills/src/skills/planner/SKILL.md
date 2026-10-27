@@ -1,5 +1,45 @@
 # Planner Skill — generate and run a scenario Plan
 
+## Intent gate — before any Planner work
+
+Decide from the **current user request** whether Planner was actually requested,
+before orientation, workspace bootstrap, or looking for a saved plan. Being
+loaded by a host or subagent is not proof that the user invoked this skill.
+Remember: **passive context is not intent**. An open or attached `plan.json`, a saved plan,
+an available MCP, or earlier tool approval does not request a Planner operation.
+
+Enter for an explicit planning or plan action, a user-typed `/planner`, or a
+genuine answer/continuation in an already-requested Planner flow. Context can
+identify the plan in "share and activate it"; it cannot turn "Hi" into that
+request. Once the action is clear, do not add a confirmation turn just to enter
+Planner or require the user to retype it as a command.
+
+Without a requested Planner action or valid continuation (for example, a
+greeting-only message, acknowledgment, general help, or documentation/code
+question about Planner), use the normal welcome/help response and **stop this
+flow**. Do not inspect
+or resume a plan, materialize Planner MCPs, discover tools, request shared access,
+or look up/create a shared project. A greeting does not answer a pending planning
+or identity question. If an actual action is ambiguous, clarify it in the main
+chat before any Planner work; do not ask a greeting-only user to choose a plan.
+A greeting combined with a clear action, such as "Hi, show my plan status",
+still requests that action.
+
+| Current message | Context | Route |
+|---|---|---|
+| "Hi" | `plan.json` is open | Normal welcome; no Planner tools. |
+| "Hello" | A plan is attached | Normal welcome; no Planner tools. |
+| "Thanks" | A plan is active | Acknowledge; no Planner tools. |
+| "What does /planner do?" | Any | Explain from documentation; no Planner tools. |
+| "Share and activate it" | A saved plan supplies the target | Planner; preserve the requested actions without another interview. |
+| "Show my plan status" | A saved plan supplies the target | Planner; report current state, without executing the next recommendation. |
+| "Hi, show my plan status" | A saved plan supplies the target | Planner; the greeting does not cancel the requested status check. |
+| "Yes" | Reply to an offered Planner action | Planner; continue only that offered action. |
+| "Workday" | Reply to the current Planner system question | Planner; capture the answer and continue the existing flow. |
+
+This admission check does not interrupt internal phases of an operation the
+user already requested. The sections below apply only after admission.
+
 This skill authors a **Plan**: a structured, local record of an ESS rollout —
 the sponsor's intent, a set of atomic Tasks each owned by a role and a person,
 and a ledger of what each Task produced. It captures the sponsor's intent first,
@@ -88,6 +128,11 @@ permissions to make planning work.
 
 ## Gate — the one skill allowed before setup
 
+Apply the **Intent gate** first. "First Planner use" means the first admitted
+Planner request, not the first message in every chat. The exception permits
+that request without completed setup or setup config; it does not relax other
+skills' setup requirements or make Planner the default welcome.
+
 Every other skill requires `.local/config.json` with `setup: "complete"`.
 `/planner` is the exception: on a greenfield tenant the environment doesn't
 exist yet, and the first Task the Plan emits is usually "run setup". So:
@@ -117,8 +162,9 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
    local-only drafting; use WorkIQ only when the person-resolution flow needs it.
    Reuse successful command results from the same chat and workspace for later
    turns or phases only while configuration and host availability remain valid.
-   At the start of each request, before its first shared call, check that
-   `.vscode/mcp.json` still exists, run the two `validate` commands above, and check
+   At the start of each request admitted by the Intent gate, before its first
+   shared call, check that `.vscode/mcp.json` still exists, run the two `validate`
+   commands above, and check
    that the MCP tools needed for this request are available.
    If the file is missing, a required server entry is missing, or the host reports
    an unavailable MCP connection, invalidate the earlier success and run
@@ -152,8 +198,9 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
 
 ## First — resume an existing plan, or start a new one
 
-**After completing the Gate above, begin plan routing here. Do NOT ask for the
-objective (or anything else) until you have checked for an existing plan.**
+**After completing the Gate above for an admitted Planner request, begin plan
+routing here. Do NOT ask for the objective (or anything else) until you have
+checked for an existing plan.**
 
 1. **Pull from the shared planner first — without an extra interview turn.**
    If the maker chose local-only drafting or declined shared access, use the saved

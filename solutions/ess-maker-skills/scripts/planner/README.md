@@ -22,6 +22,14 @@ pure logic.
 
 ## First Planner use in a chat
 
+First apply the canonical **Intent gate**: only a requested Planner action or a
+genuine continuation starts this flow. A greeting such as "Hi", general help, or
+an open/attached `plan.json` alone does not cause plan lookup, workspace bootstrap,
+MCP discovery, or shared-access prompts. Passive files can supply the target of
+"share and activate it"; they cannot supply the action. This preserves the
+normal welcome and other skills' setup gates without adding a confirmation turn
+to clear Planner requests.
+
 Whichever Planner flow runs first performs the shared workspace bootstrap:
 new planning, imports/edits, assignments, assigned tasks, completion capture,
 evaluations, status/reports, or sharing/activation. Direct phase entries use the

@@ -51,8 +51,8 @@ _CREATE_ANNOTATIONS = ToolAnnotations(
 # Get-or-create / upsert tools converge on the same resource, so a replay is
 # safe: create_agent_configuration_project returns the existing project when one
 # already matches, and attest_plan_role upserts a deterministic grant row. They
-# are creates in name only — non-destructive and idempotent — so clients may
-# safely retry them after an ambiguous failure.
+# can create records; idempotence permits safe replay after an ambiguous failure,
+# not invocation without a requested workflow.
 _CREATE_IDEMPOTENT_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
@@ -74,6 +74,11 @@ _SYNC_INVENTORY_ANNOTATIONS = ToolAnnotations(
 mcp = FastMCP(
     "ess-planner",
     instructions=(
+        "Use tools only for a user-requested workflow or a genuine continuation, "
+        "including requested planning or inventory/setup discovery. A greeting-only "
+        "message such as Hi, general help, or passive open/attached plan.json context "
+        "does not request work. Tool availability or prior approval is not permission "
+        "to start a workflow. "
         "ESS Planner reads and updates shared implementation plans, tasks, and "
         "role assignments. Explain this purpose before a host trust prompt; "
         "tool approval does not grant environment-admin permissions. "
@@ -166,8 +171,10 @@ async def create_agent_configuration_project(
     project: dict[str, Any],
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Get-or-create a project by name (case/whitespace-insensitive). Supported
-    names: {"name": "Employee Self-Service"} or {"name": "Workforce Insights"};
+    """Get-or-create a project by name (case/whitespace-insensitive). Only use
+    this for a requested Planner action, not Hi alone, general help, or an open plan.json
+    without an action. Passive file context is not permission; this operation can create a project.
+    Supported names: {"name": "Employee Self-Service"} or {"name": "Workforce Insights"};
     optional ownedById? and metadata?. An unsupported name is rejected (400
     ValidationError "name must be one of the supported configuration
     experiences: Employee Self-Service, Workforce Insights"). The returned

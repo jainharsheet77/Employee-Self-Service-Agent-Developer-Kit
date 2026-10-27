@@ -58,8 +58,9 @@ python scripts/roles/cli.py resolve-person --name "<person>"
 ## Gate — a plan must already exist
 
 Attestation is always **against an existing shared plan**; it does not require
-completed environment setup. Apply `src/skills/planner/SKILL.md` -> **Gate**
-before shared calls, including its workspace bootstrap and recovery rules.
+completed environment setup. Apply `src/skills/planner/SKILL.md` -> **Intent gate**
+for the requested role action, then its **Gate** for workspace bootstrap and
+recovery before shared calls.
 Settle on the one plan to attest against — and never auto-pick when the choice
 is ambiguous:
 

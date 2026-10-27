@@ -237,6 +237,21 @@ def test_server_identity_and_instructions() -> None:
     assert "access token" in instructions
 
 
+def test_discovery_exposes_intent_boundaries_without_shared_clients(monkeypatch) -> None:
+    def unexpected_client():
+        pytest.fail("MCP discovery must not initialize shared-service clients")
+
+    monkeypatch.setattr(planner_server, "get_client", unexpected_client)
+    monkeypatch.setattr(planner_server, "get_inventory_surface", unexpected_client)
+
+    instructions = planner_server.mcp.instructions or ""
+    for phrase in ("user-requested workflow", "greeting-only", "Hi", "plan.json", "inventory/setup"):
+        assert phrase in instructions
+    description = " ".join(_tools()["create_agent_configuration_project"].description.split())
+    for phrase in ("requested Planner action", "not permission", "can create a project"):
+        assert phrase in description
+
+
 # ---------------------------------------------------------------------------
 # Exposed surface
 # ---------------------------------------------------------------------------

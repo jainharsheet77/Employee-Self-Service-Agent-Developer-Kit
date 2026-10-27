@@ -1,15 +1,16 @@
 ---
 name: planner
 description: >-
-  Create, import, edit, assign, resume, share, activate, or track an ESS rollout plan in VS Code or Copilot CLI. Use for explicit Planner requests: "plan a rollout", "create a plan", "import my plan", "edit this plan", "assign owners", "what am I assigned?", "start my Planner task", "record task completion", "review the plan", "what is the plan status?", "share this plan", "activate this plan", "share and activate the plan", "resume my plan", or /planner. A saved local plan in a fresh chat is enough context; the user need not start a new planning interview. Open-ended "set up ESS for the first time / where do I start" is NOT a direct trigger: it gets the first-run welcome. The planner is the one experience allowed before setup.
+  Create, import, edit, assign, resume, share, activate, or track an ESS rollout plan in VS Code or Copilot CLI. Use for explicit Planner requests: "plan a rollout", "create a plan", "import my plan", "edit this plan", "assign owners", "what am I assigned?", "start my Planner task", "record task completion", "review the plan", "what is the plan status?", "share this plan", "activate this plan", "share and activate the plan", "resume my plan", or a user-typed /planner. A saved plan supplies context for a requested action; its presence alone is not a trigger. Do NOT use for greeting-only messages such as "Hi", acknowledgments alone, general help, documentation/code questions about Planner, or merely open/attached plan files. Open-ended "set up ESS for the first time / where do I start" gets the normal first-run welcome. Explicit Planner work is allowed before setup.
 ---
 
 # ESS Maker Kit — Planner
 
 Entry point for explicit planning and existing-plan requests. This skill and the
-VS Code `/planner` prompt use the same canonical flow. Whichever Planner flow
-runs first in a chat must prepare this workspace, not assume a previous session
-already prepared its connections. Later flows reuse that successful bootstrap.
+VS Code `/planner` prompt use the same canonical flow. After the **Intent gate**
+admits a request, whichever Planner flow runs first in a chat must prepare this
+workspace, not assume a previous session already prepared its connections.
+Later flows reuse that successful bootstrap.
 
 This skill ships **inside** the kit; the kit root is the `ess-maker-skills` folder
 that contains this skill's `.github/skills/` directory. Make it the working
@@ -17,9 +18,14 @@ directory before running anything.
 
 ## Steps
 
-1. **Honor the kit rules first.** Read `.github/copilot-instructions.md` at the kit
+1. **Admit the requested action first.** Apply `src/skills/planner/SKILL.md` ->
+   **Intent gate** before any Planner work. "Hi", general help, or a passive plan
+   file alone is not a request to resume; return the normal response and stop
+   without Planner tools. Being selected by the host is not evidence of the
+   user's intent.
+2. **Honor the kit rules.** Read `.github/copilot-instructions.md` at the kit
    root and follow it (persona, communication rules — never narrate files/commands).
-2. **Complete the workspace bootstrap before any shared tool call.** Read
+3. **Complete the workspace bootstrap before any shared tool call.** Read
    `src/skills/planner/SKILL.md` and apply its **Gate** before the first Planner
    flow in this chat, including direct status, assignment, editing, or completion.
    A saved plan or an already-visible Planner tool is not evidence that
@@ -31,7 +37,7 @@ directory before running anything.
    If the file disappears or the MCP connection is unavailable after a previous
    check, run the gate's bounded materialize/validate recovery before shared work.
    Backend API errors do not trigger configuration repair.
-3. **Resume, then honor the requested action.** Follow the canonical planner's
+4. **Resume, then honor the requested action.** Follow the canonical planner's
    resume check: reuse the saved local draft or refresh the shared plan when
    access is accepted. Respect local-only drafting and declined shared access.
    Do not re-run the interview or re-ask the objective for an existing plan.
@@ -46,7 +52,7 @@ directory before running anything.
    at a status response or restart the interview. If both were requested, confirm
    sharing succeeded before attempting activation, following `sync.md`.
    Reuse an already-shared/active plan rather than creating a duplicate.
-4. **Keep the handoff visible.** Apply the canonical planner's **Communication
+5. **Keep the handoff visible.** Apply the canonical planner's **Communication
    rules** to every reply: a prominent next-step heading, bold action, and
    separate prompt or command. Required questions belong in the main chat.
 
