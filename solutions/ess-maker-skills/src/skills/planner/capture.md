@@ -26,7 +26,12 @@ python scripts/planner/cli.py capture-setup --complete
 ```
 
 `--task` is optional — with it omitted the CLI **auto-detects the plan's setup
-task** (the task that produces `primaryEnvironment`) and completes it. **You (the
+task** from `primaryEnvironment` or `provisionedEnvironment`, choosing the first
+unfinished producer in dependency order. The environment is pinned under that
+task's **declared output key**, including when `--task` is supplied; `--key` is an
+explicit override, not required for provisioning. `setup-status` reports the
+selected `setupTaskId` and `setupEnvironmentKey`. Do not relabel a provisioned
+environment as a completed workspace binding. **You (the
 planner) run this after `/setup` returns** — the setup/onboarding handoff returns
 control here; `setup.py` itself does not update the plan. Confirm the detected
 values with the assignee and invoke
@@ -131,7 +136,8 @@ guard is a read-only status probe:
 python scripts/planner/cli.py setup-status
 ```
 
-It prints JSON: `setupTaskOpen` (the plan has a setup task that isn't Completed),
+It prints JSON: `setupTaskId` and `setupEnvironmentKey` (the selected task and its
+declared environment output), `setupTaskOpen` (that task isn't Completed),
 `environmentPinned` (a reusable environment **URL** is on the plan), and the
 pinned `environment`. When **`setupTaskOpen` is true** *and* `.local/config.json`
 shows setup finished — `setup` is `"complete"` with a `dataverseEndpoint`
@@ -146,7 +152,7 @@ person, then pin + complete it:
 python scripts/planner/cli.py capture-setup --complete
 ```
 
-That records `primaryEnvironment` (and the cloned agent) and marks the setup
+That records the selected task's `setupEnvironmentKey` (and the cloned agent) and marks the setup
 task — plus every other task this run fully produced — Complete, so from now on
 everyone sees that environment on the plan. When **`setupTaskOpen` is false** (no
 setup task, or it's already Completed) there is nothing to reconcile — **skip
@@ -187,25 +193,31 @@ yet, so the install can't complete — nothing lands in `config.json`, so
 `capture-setup` has nothing to observe and the environment the maker **did**
 create would be lost from the plan. Don't let that happen. When the Power
 Platform admin tells you they created (or decided) the environment but setup
-couldn't finish, persist it from what they tell you via the **ask** path — pin
-`primaryEnvironment` directly, and **without** `--complete`:
+couldn't finish, persist it from what they tell you via the **ask** path. Use the
+selected task's declared `setupEnvironmentKey`, initially **without** `--complete`:
 
 ```
-python scripts/planner/cli.py pin-output --task <setupTaskId> --key primaryEnvironment \
+python scripts/planner/cli.py pin-output --task <setupTaskId> --key <setupEnvironmentKey> \
   --kind Environment --attr environmentUrl=<org-url> --attr environmentId=<verified-guid> --source User
 ```
 
-(`setupTaskId` comes from `setup-status`; confirm the environment URL with them
-first, or read both from verified foundation state.) This saves `primaryEnvironment`
+(`setupTaskId` and `setupEnvironmentKey` come from `setup-status`; confirm the
+environment URL with them first, or read both environment values from verified
+foundation state.) This saves the declared environment output
 **locally** as `pendingOutputs`, while the setup task stays **open**. It is not
 yet visible to other workspaces: the service has no partial-output write endpoint.
-Never pass
-`--complete` here: the agent still isn't installed, so the setup task's work isn't
-done. Keep it moving but unfinished:
+For a **combined environment-and-agent task**, never pass `--complete` while the
+agent is still missing: the task's work isn't done. Keep it moving but unfinished:
 `python scripts/planner/cli.py set-state --task <setupTaskId> --state InProgress`.
 When the install is later unblocked and `/setup` finishes for real, the normal
 observed capture (`capture-setup --complete`) pins the cloned agent and closes the
 task.
+
+For a **provision-only task**, confirm that its own acceptance criteria and all
+declared outputs are satisfied. It can then be completed with `pin-output
+--complete` under `provisionedEnvironment`, even before workspace config exists.
+Keep the separate installation and binding tasks open until their own work and
+prerequisites are satisfied; do not pin `primaryEnvironment` just to close them.
 
 For new plans, split environment provisioning and agent installation at their
 role/milestone boundary (`model.md`). A genuinely finished environment task can

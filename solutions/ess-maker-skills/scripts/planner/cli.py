@@ -48,6 +48,7 @@ from planner.plan_model import (
     ARTIFACT_KINDS,
     CONFIGURING_AGENT_CHOICES,
     PLAN_PATH,
+    PRIMARY_ENVIRONMENT_KEY,
     RESEARCH_PATH,
     SCENARIO_GROUP,
     SUMMARY_FILENAME,
@@ -420,6 +421,7 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     if not task_id:
         print("No setup task found on the plan; pass --task <T#>.", file=sys.stderr)
         return 1
+    env_key = args.key or plan.setup_environment_key(task_id) or PRIMARY_ENVIRONMENT_KEY
     if args.before_file:
         with open(args.before_file, "r", encoding="utf-8") as fh:
             before = json.load(fh)
@@ -428,7 +430,7 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     else:
         before = {}
     after = snapshot_config(args.config)
-    pinned = detect_config_artifacts(before, after, task_id=task_id, env_key=args.key)
+    pinned = detect_config_artifacts(before, after, task_id=task_id, env_key=env_key)
     if not pinned:
         print("No new id/name artifacts detected in config.json; nothing to pin.", file=sys.stderr)
         return 1
@@ -798,8 +800,9 @@ def cmd_summary(args: argparse.Namespace) -> int:
 
 def cmd_setup_status(args: argparse.Namespace) -> int:
     """**Read-only** snapshot of the plan's setup state, printed as JSON — the
-    pinned primary environment (if any) and whether the plan's ``/setup`` task is
-    still open. Never mutates or saves the plan (mirrors :func:`cmd_summary`).
+    pinned environment (if any), the setup task's declared environment key, and
+    whether that task is still open. Never mutates or saves the plan (mirrors
+    :func:`cmd_summary`).
 
     Serves two callers that must not parse ``plan.json`` themselves:
 
@@ -835,6 +838,7 @@ def cmd_setup_status(args: argparse.Namespace) -> int:
     status = {
         "hasPlan": plan is not None,
         "setupTaskId": setup_tid,
+        "setupEnvironmentKey": plan.setup_environment_key(setup_tid) if (plan and setup_tid) else None,
         "setupTaskState": setup_state,
         # Reconcile guard: fold a finished FRE setup into the plan only while the
         # setup task is still open; once Completed, skip so repeated resumes never
@@ -1190,7 +1194,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("capture-setup", help="observe /setup output and pin every id+name artifact in config.json")
     p.add_argument("--task", help="setup task id (default: auto-detect the plan's /setup task)")
-    p.add_argument("--key", default="primaryEnvironment")
+    p.add_argument(
+        "--key",
+        help="environment output key (default: the task's declared setup environment key, otherwise primaryEnvironment)",
+    )
     p.add_argument("--config", default=os.path.join(".local", "config.json"))
     p.add_argument("--before", help="JSON snapshot taken before setup (optional)")
     p.add_argument("--before-file", dest="before_file", help="path to a JSON snapshot taken before the action (enables the generic id+name sweep)")
@@ -1200,7 +1207,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser(
         "setup-status",
-        help="read-only JSON: the plan's pinned primary environment + whether the /setup task is still "
+        help="read-only JSON: the plan's pinned environment, setup output key + whether the /setup task is still "
              "open (drives the /setup env-reuse offer and the planner reconcile guard)",
     )
     p.add_argument("--key", default="primaryEnvironment",

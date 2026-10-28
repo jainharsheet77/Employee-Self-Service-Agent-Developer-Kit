@@ -207,12 +207,13 @@ def test_dependent_work_waits_for_shared_metadata_not_just_local_completion():
     merged.set_task_state("connect", "InProgress")
 
 
-def test_retrospective_setup_capture_keeps_offline_evidence_while_sync_is_pending(tmp_path):
+@pytest.mark.parametrize("environment_key", ["primaryEnvironment", "provisionedEnvironment"])
+def test_retrospective_setup_capture_keeps_offline_evidence_while_sync_is_pending(tmp_path, environment_key):
     path, config = tmp_path / "plan.json", tmp_path / "config.json"
     plan = Plan.new()
     plan.set_remote_identity(project_id="project", plan_id="plan")
-    plan.add_task(new_task("setup", "Prepare environment", produces=["primaryEnvironment"]))
-    plan.add_task(new_task("install", "Install ESS", produces=["essAgent"], consumes=["primaryEnvironment"]))
+    plan.add_task(new_task("setup", "Prepare environment", produces=[environment_key]))
+    plan.add_task(new_task("install", "Install ESS", produces=["essAgent"], consumes=[environment_key]))
     plan.save_all(path)
     config.write_text(json.dumps({
         "setup": "complete", "environmentId": "env-id",
@@ -225,6 +226,7 @@ def test_retrospective_setup_capture_keeps_offline_evidence_while_sync_is_pendin
     saved = Plan.load(path)
     assert {task["id"] for task in saved.pending_sync_tasks()} == {"setup", "install"}
     assert all(task["state"] == "Completed" for task in saved.tasks)
+    assert saved.output(environment_key)["producedByTaskId"] == "setup"
     assert saved.output("essAgent")["producedByTaskId"] == "install"
 
 
@@ -442,8 +444,66 @@ def test_setup_handoff_selects_provisioning_not_blocked_workspace_binding(tmp_pa
     assert not plan.first_run_setup_pending("bind")
     assert cli.main(["--plan", str(path), "setup-status"]) == 0
     status = json.loads(capsys.readouterr().out)
+    assert status["setupTaskId"] == "provision"
+    assert status["setupEnvironmentKey"] == "provisionedEnvironment"
+    assert status["setupTaskOpen"] is True
     assert status["firstRunSetupTaskId"] == "provision"
     assert status["agentPinned"] is False
+
+
+@pytest.mark.parametrize("split_binding", [False, True])
+def test_provision_only_capture_preserves_key_and_advances_setup_status(tmp_path, capsys, split_binding):
+    path, config = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = Plan.new()
+    if split_binding:
+        plan.add_task(new_task(
+            "bind", "Bind workspace", produces=["primaryEnvironment"],
+            consumes=["provisionedEnvironment", "deployedEssAgent"],
+        ))
+    plan.add_task(new_task("provision", "Provision environment", produces=["provisionedEnvironment"]))
+    plan.add_task(new_task(
+        "install", "Install ESS", produces=["deployedEssAgent"],
+        consumes=["provisionedEnvironment"],
+    ))
+    plan.save_all(path)
+    config.write_text(json.dumps({
+        "environmentId": "env-id",
+        "dataverseEndpoint": "https://test.crm.dynamics.com",
+    }), encoding="utf-8")
+
+    assert cli.main([
+        "--plan", str(path), "capture-setup", "--config", str(config), "--complete",
+    ]) == 0
+    saved = Plan.load(path)
+    artifact = saved.output("provisionedEnvironment")
+    assert artifact["producedByTaskId"] == "provision"
+    assert artifact["attributes"] == {
+        "environmentId": "env-id", "environmentUrl": "https://test.crm.dynamics.com",
+    }
+    assert saved.output("primaryEnvironment") is None
+    assert saved.task("provision")["state"] == "Completed"
+    assert saved.task("install")["state"] == "NotStarted"
+    assert saved.blocking_inputs("install") == {}
+    assert saved.validate() == []
+
+    capsys.readouterr()
+    assert cli.main(["--plan", str(path), "setup-status"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["environmentPinned"] is True
+    assert status["environment"]["environmentId"] == "env-id"
+    assert status["firstRunSetupTaskId"] is None
+    assert status["agentPinned"] is False
+    if split_binding:
+        assert saved.task("bind")["state"] == "NotStarted"
+        assert saved.blocking_inputs("bind") == {"deployedEssAgent": ["install"]}
+        assert status["setupTaskId"] == "bind"
+        assert status["setupEnvironmentKey"] == "primaryEnvironment"
+        assert status["setupTaskOpen"] is True
+    else:
+        assert status["setupTaskId"] == "provision"
+        assert status["setupEnvironmentKey"] == "provisionedEnvironment"
+        assert status["setupTaskState"] == "Completed"
+        assert status["setupTaskOpen"] is False
 
 
 def test_setup_status_reuses_provisioned_environment_before_workspace_binding(tmp_path, capsys):

@@ -95,11 +95,12 @@ CONFIGURING_AGENT_CHOICES = (
     "EmployeeSelfServiceHRDA",
     "EmployeeSelfServiceITDA",
 )
-# The ledger key the /setup task produces and downstream tasks consume — the
-# grounded signal used to identify the setup task and env-dependent tasks. A Task
+# The ledger keys setup tasks produce and downstream tasks consume — the
+# grounded signal used to identify setup tasks and env-dependent tasks. A Task
 # is described only by its title + description (matching the WeveNova Task
 # entity); there is no execution-hint/action field.
 PRIMARY_ENVIRONMENT_KEY = "primaryEnvironment"
+SETUP_ENVIRONMENT_KEYS = (PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment")
 # The ledger key the /discover task produces — the tenant inventory summary the
 # discover skill pins back onto the plan after a crawl (see
 # capture.py::summarize_discovery and src/skills/discover/SKILL.md). Keyed like
@@ -1058,15 +1059,22 @@ class Plan:
         never mutates it, and never changes stored task sequence or state."""
         return ", ".join(self.waiting_on(task_id))
 
+    def setup_environment_key(self, task_id: str) -> str | None:
+        """The environment output declared by a setup task, if any."""
+        produces = self._require_task(task_id).get("produces") or []
+        return next((key for key in SETUP_ENVIRONMENT_KEYS if key in produces), None)
+
     def setup_task_id(self) -> str | None:
-        """The plan's setup task id — the task that **produces** the primary
-        environment (`primaryEnvironment`), i.e. the ``/setup`` task. Prefers the
-        first not-yet-Completed such task, else the first one; ``None`` if no task
-        produces it. Keyed on the grounded ``produces`` signal, not on any
-        execution-hint field."""
+        """The first unfinished environment-producing task in dependency order.
+
+        Recognizes both ``primaryEnvironment`` and ``provisionedEnvironment``,
+        so provisioning is captured before dependent workspace binding. Falls
+        back to the first completed candidate, or ``None`` when no task declares
+        either output. Never infers setup work from a title or execution hint.
+        """
         candidates = [
-            t for t in self.tasks
-            if PRIMARY_ENVIRONMENT_KEY in (t.get("produces") or [])
+            t for t in self.ordered_tasks()
+            if self.setup_environment_key(t["id"]) is not None
         ]
         if not candidates:
             return None
@@ -1170,9 +1178,10 @@ class Plan:
         """Whether this task is the plan's **first-run setup** still waiting to run.
 
         True only for a ready ``/setup`` task (one that **produces**
-        `primaryEnvironment` or `provisionedEnvironment`) while it is not yet Completed **and no environment
-        is pinned on the plan yet**. This is the deterministic first-run-experience
-        (FRE) signal: when the Power Platform admin asks "what are my tasks?" and
+        `primaryEnvironment` or `provisionedEnvironment`) while it is not yet
+        Completed **and no environment is pinned on the plan yet**. This is the
+        deterministic first-run-experience (FRE) signal: when the Power Platform
+        admin asks "what are my tasks?" and
         their setup task is still open with no environment decided, nudge them to
         run ``/setup`` **now** (it decides or creates the environment the whole
         plan runs on).
@@ -1185,13 +1194,12 @@ class Plan:
         they cover both sides of the environment handshake without overlapping.
         """
         task = self._require_task(task_id)
-        if not {PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment"}.intersection(task.get("produces") or []):
+        if self.setup_environment_key(task_id) is None:
             return False
         if task.get("state") not in ("NotStarted", "InProgress"):
             return False
         return (
-            self.output(PRIMARY_ENVIRONMENT_KEY) is None
-            and self.output("provisionedEnvironment") is None
+            all(self.output(key) is None for key in SETUP_ENVIRONMENT_KEYS)
             and not self.blocking_inputs(task_id)
         )
 
@@ -1829,7 +1837,7 @@ class Plan:
         def priority(i: int) -> tuple[int, int]:
             foundation = (
                 (tasks[i].get("stream") or "").casefold() == "setup"
-                or bool({PRIMARY_ENVIRONMENT_KEY, "provisionedEnvironment"}.intersection(tasks[i].get("produces") or []))
+                or any(key in (tasks[i].get("produces") or []) for key in SETUP_ENVIRONMENT_KEYS)
             )
             return (0 if foundation else 1, i)
 

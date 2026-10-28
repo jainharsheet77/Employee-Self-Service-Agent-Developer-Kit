@@ -180,7 +180,8 @@ def test_task_has_only_wevenova_fields():
     assert set(t) == {"id", "title", "description", "assignedTo", "state", "produces", "consumes"}
 
 
-def test_setup_task_id_is_the_env_producer():
+@pytest.mark.parametrize("environment_key", ["primaryEnvironment", "provisionedEnvironment"])
+def test_setup_task_id_is_the_env_producer(environment_key):
     p = Plan.new()
     # A portal "provision" task is NOT the setup task; the task that PRODUCES the
     # environment is.
@@ -190,7 +191,7 @@ def test_setup_task_id_is_the_env_producer():
     p.add_task(new_task("T2", "Run setup",
                         description="Run /setup to onboard the ADK",
                         assigned_to=principal_pool("power-platform-admin"),
-                        produces=["primaryEnvironment"]))
+                        produces=[environment_key]))
     assert p.setup_task_id() == "T2"
     assert Plan.new().setup_task_id() is None  # no task produces the env -> None
 
@@ -211,7 +212,10 @@ def test_discover_task_id_is_the_inventory_producer():
     assert Plan.new().discover_task_id() is None  # no task produces the inventory -> None
 
 
-def test_capture_setup_autodetects_setup_task(tmp_path):
+@pytest.mark.parametrize("environment_key", ["primaryEnvironment", "provisionedEnvironment"])
+@pytest.mark.parametrize("explicit_task", [False, True])
+@pytest.mark.parametrize("explicit_key", [False, True])
+def test_capture_setup_uses_produced_environment_key(tmp_path, environment_key, explicit_task, explicit_key):
     plan_path = str(tmp_path / "plan.json")
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"setup": "complete",
@@ -221,14 +225,45 @@ def test_capture_setup_autodetects_setup_task(tmp_path):
     _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Provision env",
          "--description", "In the portal, provision the environment", "--role", "power-platform-admin")
     _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Run setup",
-         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
-    # No --task: capture-setup finds the plan's setup task (T2 produces the env), pins env, completes it.
-    rc = _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete")
+         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin", "--produces", environment_key)
+    options = ["--task", "T2"] if explicit_task else []
+    if explicit_key:
+        options.extend(["--key", environment_key])
+    rc = _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete", *options)
     assert rc == 0
     p = Plan.load(plan_path)
-    assert p.output("primaryEnvironment")["attributes"]["environmentId"] == "env-7"
+    assert p.output(environment_key)["attributes"]["environmentId"] == "env-7"
+    assert p.output(environment_key)["producedByTaskId"] == "T2"
+    other_key = "primaryEnvironment" if environment_key == "provisionedEnvironment" else "provisionedEnvironment"
+    assert p.output(other_key) is None
     assert p.task("T2")["state"] == "Completed"
     assert p.task("T1")["state"] == "NotStarted"  # portal task untouched
+
+
+@pytest.mark.parametrize(("environment_key", "options"), [
+    ("provisionedEnvironment", []),
+    ("customEnvironment", ["--task", "setup", "--key", "customEnvironment"]),
+])
+def test_capture_setup_preview_preserves_plan_and_honors_key_override(tmp_path, capsys, environment_key, options):
+    path, config = tmp_path / "plan.json", tmp_path / "config.json"
+    plan = Plan.new()
+    plan.add_task(new_task("setup", "Prepare environment", produces=[environment_key]))
+    plan.save_all(path)
+    config.write_text(json.dumps({
+        "environmentId": "env-id", "dataverseEndpoint": "https://test.crm.dynamics.com",
+    }), encoding="utf-8")
+    before = path.read_bytes()
+    args = ["--plan", str(path), "capture-setup", "--config", str(config), *options]
+    assert _run(*args, "--dry-run") == 0
+    preview = json.loads(capsys.readouterr().out)
+    assert [artifact["key"] for artifact in preview] == [environment_key]
+    assert path.read_bytes() == before
+
+    assert _run(*args, "--complete") == 0
+    saved = Plan.load(path)
+    assert saved.task("setup")["state"] == "Completed"
+    assert saved.output(environment_key)["producedByTaskId"] == "setup"
+    assert saved.output("primaryEnvironment") is None
 
 
 def _write_results(path, **overrides):
