@@ -160,6 +160,10 @@ Run this the moment `/planner` starts, before deciding whether to interview:
 is authoritative). It prints any validation notes as warnings — treat them as
 diagnostics. A corrupt local cache or a pending write belonging to another plan
 must stop replacement rather than silently discard local work.
+An unshared draft with pending completions or outputs is **not** associated with
+an existing shared plan merely because task titles or local IDs match. Import
+stops and leaves its JSON and Markdown intact. Reconcile the separate plans
+before resuming; never add a first-share association just to bypass this guard.
 Malformed/error tool results or missing plan/task identities are rejected before
 replacing the cache; they are not an empty shared plan.
 
@@ -247,7 +251,8 @@ model), store it in **one** create call rather than task-by-task:
    plan — if a keyless push fails ambiguously, re-read the project's plans and
    reconcile the result before another create. Adding a key retroactively does
    not deduplicate the original request.) The plan and all its tasks are created
-   atomically, in **Draft**. Keep the returned `planId` and `etag`. A Draft plan
+   atomically, in **Draft**. Keep the returned `planId`, `etag`, and the raw
+   successful create response for the association in step 4. A Draft plan
    already holds all its tasks with their assignees baked in at creation, but
    those tasks can't be *mutated* (reassigned, state-changed, edited, completed)
    until the plan is **Active** — and **the backend never auto-activates a plan**.
@@ -255,10 +260,16 @@ model), store it in **one** create call rather than task-by-task:
    confirms the plan is ready to run (step 6). Do **not** activate here.
 4. **Re-hydrate so the cache carries the server ids** (planId, task ids, etag):
    `get_project_plan` + `list_project_plan_tasks`, then hand each result to
-   `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result>`
+   `import-remote-plan --plan-file <get_project_plan result> --tasks-file <list_project_plan_tasks result> --created-plan-file <successful create_project_plan result>`
    (one file per flag — never hand-stitch a combined object or run the results
    through PowerShell JSON cmdlets; the CLI strips the trailing `{"result": …}`
-   envelope itself). The plan is now cached as **Draft** with real ids.
+   envelope itself). Use `--created-plan-file` **only** for the successful create
+   of this local draft, never for a normal pull/resume or another plan's result.
+   Its plan ID and any returned project ID must match the readback. Only this
+   explicit association permits unique title matching to carry offline progress
+   onto newly assigned task IDs; missing/ambiguous matches stop for reconciliation
+   without replacing the draft. Do not fabricate a receipt or use `stamp-remote`
+   to bypass that check. The plan is now cached as **Draft** with real ids.
 5. **Confirm it's saved to the shared space, then offer to activate.** The plan the
    sponsor already reviewed locally is now stored as a **Draft** with its assignees
    baked in — tell them it's saved to the shared space (plain language, never name

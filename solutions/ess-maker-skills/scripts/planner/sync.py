@@ -709,6 +709,8 @@ def hydrate_from_remote(
 def preserve_local_pending(
     hydrated: dict[str, Any],
     local: dict[str, Any] | None,
+    *,
+    created_plan: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Carry an unpushed local completion across a pull so the service's stale
     state can't silently revert it.
@@ -723,9 +725,23 @@ def preserve_local_pending(
     invariant that a Completed task's produces resolve — survives until a push lands.
     Only matching completion state AND the expected output values acknowledge a
     completion. Partial outputs are retained without completing their task.
+    A first share must supply its successful ``created_plan`` response, matched
+    to the readback identity, before local task titles can be associated with
+    server-assigned IDs. An ordinary pull cannot attach an unassociated draft.
 
-    Returns ``hydrated`` (mutated in place); a missing/empty ``local`` is a no-op.
+    Returns ``hydrated`` (mutated in place); without a create response, a
+    missing/empty ``local`` is a no-op.
     """
+    first_share = created_plan is not None
+    if created_plan is not None:
+        if not isinstance(local, dict) or local.get("planId"):
+            raise ValueError("a create response can only associate an existing unshared local draft")
+        created = hydrate_from_remote(created_plan)
+        created_id = created.get("planId")
+        if not isinstance(created_id, str) or not created_id.strip() or created_id != hydrated.get("planId"):
+            raise ValueError("the successful create response must identify the same plan as the readback")
+        if created.get("projectId") and hydrated.get("projectId") and created["projectId"] != hydrated["projectId"]:
+            raise ValueError("the successful create response belongs to a different project than the readback")
     if not isinstance(local, dict):
         return hydrated
     local_tasks = [
@@ -734,8 +750,14 @@ def preserve_local_pending(
     ]
     if not local_tasks:
         return hydrated
-    if local.get("planId") and (
-        local.get("planId") != hydrated.get("planId")
+    if not local.get("planId") and hydrated.get("planId") and not first_share:
+        raise ValueError(
+            "this draft's pending work has no shared-plan association; provide its "
+            "successful create response with --created-plan-file for the first share, "
+            "or reconcile the separate plans before importing"
+        )
+    if (
+        (local.get("planId") and local["planId"] != hydrated.get("planId"))
         or (local.get("projectId") and hydrated.get("projectId") and local["projectId"] != hydrated["projectId"])
     ):
         raise ValueError("pending changes belong to a different shared plan; sync them before switching")
@@ -750,12 +772,20 @@ def preserve_local_pending(
 
     for lt in local_tasks:
         match = by_remote.get(lt.get("remoteId")) or by_id.get(lt.get("id"))
-        if match is None and not local.get("planId"):
-            # The first share assigns new ids. Only an unambiguous title can
-            # associate an offline completion with its newly created task.
+        if match is None and first_share:
+            # Only the confirmed first share can associate server-assigned IDs
+            # by title; an unrelated shared plan is not a continuation of a draft.
             candidates = [t for t in hydrated_tasks if t.get("title") == lt.get("title")]
-            if len(candidates) == 1:
-                match = candidates[0]
+            local_candidates = [
+                t for t in local.get("tasks", [])
+                if isinstance(t, dict) and t.get("title") == lt.get("title")
+            ]
+            if len(candidates) != 1 or len(local_candidates) != 1:
+                raise ValueError(
+                    f"first-share task {lt.get('id')!r} has no unique title match; "
+                    "reconcile the create response and task readback before importing"
+                )
+            match = candidates[0]
         expected = [
             a for a in local_outputs
             if a.get("producedByTaskId") == lt.get("id") and a.get("state") == "Active"

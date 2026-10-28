@@ -458,6 +458,9 @@ def test_cli_mark_synced_all_clears_everything(tmp_path, capsys):
 
 def test_cli_import_remote_plan_preserves_unpushed_completion(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    local = Plan.load(plan_path)
+    local.set_remote_identity(project_id="proj-1", plan_id="plan-1")
+    local.save_all(plan_path)
     capsys.readouterr()
     # The service still shows the discover task NotStarted (the completion never
     # reached it). A plain pull would revert it; import must preserve it.
@@ -488,6 +491,9 @@ def test_cli_import_remote_plan_preserves_unpushed_completion(tmp_path, capsys):
 
 def test_cli_import_remote_plan_clears_pending_when_service_confirms(tmp_path, capsys):
     plan_path = _plan_with_completed_discover(tmp_path, capsys)
+    local = Plan.load(plan_path)
+    local.set_remote_identity(project_id="proj-1", plan_id="plan-1")
+    local.save_all(plan_path)
     capsys.readouterr()
     from planner.sync import to_remote_output
 

@@ -929,8 +929,10 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
     ``--tasks-file``) or a single ``{"plan": <plan>, "tasks": [...]}`` payload / a
     bare plan entity (``--input``). A large tool result is saved as the payload
     followed by a trailing ``{"result": ...}`` envelope, so every source is read
-    through :func:`extract_json_payload` (first JSON document wins). The service is
-    the source of truth, so this does **not** gate the write on local validation —
+    through :func:`extract_json_payload` (first JSON document wins).
+    ``--created-plan-file`` associates an unshared draft with its successful
+    create response; normal resume never infers that association from titles.
+    The service is the source of truth, so this does **not** gate the write on local validation —
     it only surfaces any validation notes as non-blocking warnings.
     """
     try:
@@ -956,6 +958,12 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
                 # Allow passing the plan entity directly (tasks embedded via expansion).
                 plan_entity = payload
                 tasks = None
+        created_plan = (
+            extract_json_payload(_read_input(args.created_plan_file))
+            if args.created_plan_file else None
+        )
+        if args.created_plan_file and not isinstance(created_plan, dict):
+            raise ValueError("the successful create response must be a service Plan object")
     except (OSError, ValueError) as exc:
         print(f"Could not read plan payload: {exc}", file=sys.stderr)
         return 1
@@ -972,29 +980,19 @@ def cmd_import_remote_plan(args: argparse.Namespace) -> int:
     # completion that was saved locally but never pushed (pendingSync). Carry those
     # forward so an unpushed local completion is never clobbered by the service's
     # stale state; they stay flagged and the agent re-pushes them.
-    preserved: list[str] = []
+    local_data = None
     if os.path.exists(args.plan):
         try:
             local_data = Plan.load(args.plan).data
         except (OSError, ValueError) as exc:
             print(f"Local plan could not be read; refusing to overwrite it: {exc}", file=sys.stderr)
             return 1
-        if local_data:
-            before = {
-                t.get("remoteId") or t.get("id")
-                for t in local_data.get("tasks", [])
-                if isinstance(t, dict) and t.get("pendingSync")
-            }
-            try:
-                data = preserve_local_pending(data, local_data)
-            except ValueError as exc:
-                print(f"Local changes kept; cannot replace this plan: {exc}", file=sys.stderr)
-                return 1
-            preserved = [
-                t.get("id", "")
-                for t in data.get("tasks", [])
-                if t.get("pendingSync") and (t.get("remoteId") or t.get("id")) in before
-            ]
+    try:
+        data = preserve_local_pending(data, local_data, created_plan=created_plan)
+    except ValueError as exc:
+        print(f"Local changes kept; cannot replace this plan: {exc}", file=sys.stderr)
+        return 1
+    preserved = [t.get("id", "") for t in data.get("tasks", []) if t.get("pendingSync")]
 
     plan = Plan(data)
     plan.save_all(args.plan)
@@ -1309,6 +1307,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tasks-file", dest="tasks_file",
                    help="path to the raw list_project_plan_tasks tool-result dump "
                         "(used with --plan-file)")
+    p.add_argument("--created-plan-file", dest="created_plan_file",
+                   help="successful create_project_plan response for this local draft's "
+                        "first share; its identity must match the imported plan")
     p.set_defaults(func=cmd_import_remote_plan)
 
     p = sub.add_parser("stamp-remote",

@@ -371,20 +371,122 @@ def test_pending_changes_do_not_leak_into_another_plan():
         sync.preserve_local_pending(other.data, plan.data)
 
 
-def test_first_share_rekeys_pending_completion_and_outputs():
+@pytest.mark.parametrize("completed", [False, True])
+@pytest.mark.parametrize("remote_task_id", ["local-task", "remote-task"])
+def test_import_keeps_unassociated_pending_draft_intact(tmp_path, capsys, completed, remote_task_id):
+    path, remote_path = tmp_path / "plan.json", tmp_path / "remote.json"
+    local = Plan.new(objective="An unrelated local rollout")
+    local.add_task(new_task("local-task", "Prepare environment", produces=["env"]))
+    local.add_output(plan_artifact(
+        "env", "Environment", {"environmentId": "local-env"}, produced_by_task_id="local-task",
+    ))
+    if completed:
+        local.set_task_state("local-task", "Completed")
+    local.save_all(path)
+    summary = tmp_path / "ESS-scenario-plan.md"
+    before_plan, before_summary = path.read_bytes(), summary.read_bytes()
+    remote_path.write_text(json.dumps({
+        "plan": {"planId": "existing-plan", "projectId": "project", "status": "Active"},
+        "tasks": [{
+            "taskId": remote_task_id, "title": "Prepare environment",
+            "state": "NotStarted", "produces": ["env"], "etag": "remote-etag",
+        }],
+    }), encoding="utf-8")
+
+    assert cli.main(["--plan", str(path), "import-remote-plan", "--input", str(remote_path)]) == 1
+    assert path.read_bytes() == before_plan
+    assert summary.read_bytes() == before_summary
+    assert "successful create response" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("completed", [False, True])
+def test_first_share_rekeys_pending_progress_and_outputs(tmp_path, capsys, completed):
+    path = tmp_path / "plan.json"
     local = Plan.new()
     local.add_task(new_task("local-task", "Prepare environment", produces=["env"]))
     local.add_output(plan_artifact("env", "Environment", {"environmentId": "env-id"}, produced_by_task_id="local-task"))
-    local.set_task_state("local-task", "Completed")
-    remote = sync.hydrate_from_remote(
-        {"planId": "shared", "projectId": "project"},
-        [{"taskId": "remote-task", "title": "Prepare environment", "produces": ["env"], "etag": "created-etag"}],
-    )
-    merged = Plan(sync.preserve_local_pending(remote, local.data))
+    if completed:
+        local.set_task_state("local-task", "Completed")
+    local.save_all(path)
+    created = {"PlanId": "shared", "ProjectId": "project", "Status": "Draft"}
+    remote = {"planId": "shared", "projectId": "project", "status": "Draft"}
+    tasks = [{"taskId": "remote-task", "title": "Prepare environment", "produces": ["env"], "etag": "created-etag"}]
+    created_path, plan_path, tasks_path = (tmp_path / name for name in ("created.json", "remote.json", "tasks.json"))
+    for file, payload in ((created_path, created), (plan_path, remote), (tasks_path, tasks)):
+        file.write_text(
+            json.dumps(payload) + "\n" + json.dumps({"result": json.dumps(payload)}),
+            encoding="utf-8",
+        )
+
+    assert cli.main([
+        "--plan", str(path), "import-remote-plan",
+        "--plan-file", str(plan_path), "--tasks-file", str(tasks_path),
+        "--created-plan-file", str(created_path),
+    ]) == 0
+    merged = Plan.load(path)
+    assert merged.data["planId"] == "shared"
+    assert merged.data["status"] == "Draft"
     assert len(merged.tasks) == 1
-    assert merged.task("remote-task")["pendingSync"]
     assert merged.task("remote-task")["etag"] == "created-etag"
     assert merged.output("env")["producedByTaskId"] == "remote-task"
+    if completed:
+        assert merged.task("remote-task")["pendingSync"]
+        assert merged.task("remote-task")["state"] == "Completed"
+        assert "Preserved unpushed local completion(s): remote-task" in capsys.readouterr().err
+    else:
+        assert merged.task("remote-task")["pendingOutputs"]
+        assert not merged.task("remote-task").get("pendingSync")
+        assert merged.task("remote-task")["state"] == "NotStarted"
+        assert "Partial outputs retained locally, not yet shared: remote-task" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("created", [
+    {"planId": "other", "projectId": "project"},
+    {"planId": "shared", "projectId": "other"},
+    {"error": "create failed"},
+    None,
+    [],
+])
+def test_first_share_rejects_invalid_create_receipt_without_replacing_draft(tmp_path, created):
+    path, remote_path, created_path = (tmp_path / name for name in ("plan.json", "remote.json", "created.json"))
+    local = Plan.new(objective="Keep this draft")
+    local.add_task(new_task("local-task", "Review scope"))
+    local.set_task_state("local-task", "Completed")
+    local.save_all(path)
+    summary = tmp_path / "ESS-scenario-plan.md"
+    before_plan, before_summary = path.read_bytes(), summary.read_bytes()
+    remote_path.write_text(json.dumps({
+        "plan": {"planId": "shared", "projectId": "project"},
+        "tasks": [{"taskId": "remote-task", "title": "Review scope"}],
+    }), encoding="utf-8")
+    created_path.write_text(json.dumps(created), encoding="utf-8")
+
+    assert cli.main([
+        "--plan", str(path), "import-remote-plan", "--input", str(remote_path),
+        "--created-plan-file", str(created_path),
+    ]) == 1
+    assert path.read_bytes() == before_plan
+    assert summary.read_bytes() == before_summary
+
+
+@pytest.mark.parametrize("duplicate_side", ["local", "remote", "missing"])
+def test_first_share_requires_unique_task_association(duplicate_side):
+    local = Plan.new()
+    local.add_task(new_task("local-task", "Review scope"))
+    local.set_task_state("local-task", "Completed")
+    tasks = [{"taskId": "remote-task", "title": "Review scope"}]
+    if duplicate_side == "local":
+        local.add_task(new_task("other-local", "Review scope"))
+    elif duplicate_side == "remote":
+        tasks.append({"taskId": "other-remote", "title": "Review scope"})
+    else:
+        tasks = []
+    created = {"planId": "shared", "projectId": "project"}
+    remote = sync.hydrate_from_remote(created, tasks)
+    before = copy.deepcopy(local.data)
+    with pytest.raises(ValueError, match="no unique title match"):
+        sync.preserve_local_pending(remote, local.data, created_plan=created)
+    assert local.data == before
 
 
 def test_conflicting_shared_output_requires_review_without_losing_local_result():

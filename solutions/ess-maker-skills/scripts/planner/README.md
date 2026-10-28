@@ -90,6 +90,9 @@ Known `OpenTypeTooLarge` responses get non-retry guidance. Generic 500s are not
 guessed to be size errors. Diagnostics include the authenticated tenant and
 request identifiers, never tokens; a reported tenant mismatch must be resolved
 before further writes, not copied into configuration as a new default.
+Final retryable HTTP failures and conflict-recovery guidance retain the original
+HTTP status, authenticated tenant, and request IDs. Retry limits and the
+no-blind-replay ETag policy are unchanged.
 After updating the kit, restart a running `ess-planner` MCP server once to load
 the new code. Materializing an unchanged definition does not hot-reload Python.
 
@@ -192,6 +195,15 @@ plan assignment. Existing shared-plan roles can be assigned before environment
 setup; the actual environment-access checks remain separate.
 
 ## Local, shared, and confirmed are different states
+
+An unshared draft's pending work cannot merge into a shared plan based only on
+matching titles or local IDs. First-share readback supplies
+`import-remote-plan --created-plan-file <successful create_project_plan result>`
+alongside the plan/task result files. The create identity must match the
+readback before unique title matches can associate newly assigned task IDs.
+Missing proof, mismatched identities, or ambiguous first-share task matches stop
+replacement and leave the draft intact. Normal resume uses established plan/task
+identities and never supplies a create response as a workaround.
 
 The first draft is saved in the workspace, not just the chat. First sharing and
 activation each require consent. Every completion path queues `pendingSync`;

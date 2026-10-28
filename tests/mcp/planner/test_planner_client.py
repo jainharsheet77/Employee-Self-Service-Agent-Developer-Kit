@@ -36,6 +36,7 @@ import roles_surface as roles_module  # noqa: E402
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
 CALLER_OID = "99999999-8888-7777-6666-555555555555"
+REQUEST_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
 BASE = "https://substrate.office.com/weveb2/api/beta"
 
 
@@ -79,6 +80,15 @@ def _run(client, coro_factory):
 async def _no_sleep(*_args, **_kwargs):
     """Drop-in for asyncio.sleep so retry backoff is instant under test."""
     return None
+
+
+def _assert_request_diagnostics(error, request, request_id=REQUEST_ID):
+    message = str(error)
+    assert f"HTTP {error.http_status}" in message
+    assert f"authenticated tenant: {TENANT_ID}" in message
+    assert request.headers["client-request-id"] in message
+    assert request_id in message
+    assert _token() not in message
 
 
 # ---------------------------------------------------------------------------
@@ -707,7 +717,8 @@ def _stale_then_ok_handler(requests, mutate_method, retry_response, refetch_json
             attempts = [r for r in requests if r.method == mutate_method]
             if len(attempts) == 1:
                 return httpx.Response(
-                    412, json={"Code": "PreconditionFailed", "Message": "stale"}
+                    412, headers={"request-id": REQUEST_ID},
+                    json={"Code": "PreconditionFailed", "Message": "stale"},
                 )
             return retry_response
         if request.method == "GET":
@@ -744,6 +755,7 @@ def test_task_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
     # Exactly one PATCH (no blind replay) and a single re-read GET.
     patches = [r for r in requests if r.method == "PATCH"]
     assert [p.headers["If-Match"] for p in patches] == ['W/"1"']
+    _assert_request_diagnostics(excinfo.value, patches[0])
     gets = [r for r in requests if r.method == "GET"]
     assert len(gets) == 1
     assert str(gets[0].url).endswith("agentPlanTasks('task1')")
@@ -772,6 +784,7 @@ def test_task_delete_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
     # Exactly one DELETE (no blind replay) and a single re-read GET.
     deletes = [r for r in requests if r.method == "DELETE"]
     assert [d.headers["If-Match"] for d in deletes] == ['W/"4"']
+    _assert_request_diagnostics(excinfo.value, deletes[0])
     assert len([r for r in requests if r.method == "GET"]) == 1
 
 
@@ -799,6 +812,7 @@ def test_plan_update_preserves_stale_etag_412_without_replaying(monkeypatch) -> 
     assert 'W/"7"' in str(excinfo.value)
     patches = [r for r in requests if r.method == "PATCH"]
     assert [p.headers["If-Match"] for p in patches] == ['W/"6"']  # no replay
+    _assert_request_diagnostics(excinfo.value, patches[0])
 
 
 def test_stale_etag_retry_gives_up_when_version_did_not_move(monkeypatch) -> None:
@@ -840,7 +854,10 @@ def test_task_mutation_on_non_active_plan_gets_actionable_409(monkeypatch) -> No
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         if request.method == "PATCH":
-            return httpx.Response(409, json={"Code": "Conflict", "Message": generic})
+            return httpx.Response(
+                409, headers={"request-id": REQUEST_ID},
+                json={"Code": "Conflict", "Message": generic},
+            )
         if request.method == "GET":
             return httpx.Response(200, json={"Status": "Draft", "ETag": 'W/"1"'})
         return httpx.Response(200, json={})
@@ -859,6 +876,7 @@ def test_task_mutation_on_non_active_plan_gets_actionable_409(monkeypatch) -> No
     message = str(excinfo.value)
     assert "not Active" in message
     assert "update_project_plan" in message and '"status": "Active"' in message
+    _assert_request_diagnostics(excinfo.value, requests[0])
     # The clarifier re-reads the plan (not the task) to learn the status.
     gets = [r for r in requests if r.method == "GET"]
     assert len(gets) == 1
@@ -1122,6 +1140,49 @@ def test_rejected_token_is_reported_without_automatic_replay(monkeypatch):
     assert error.value.http_status == 401
     assert "HTTP 401" in str(error.value)
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", [429, 502, 503, 504])
+@pytest.mark.parametrize("operation", ["read", "keyed-create", "unkeyed-create"])
+def test_exhausted_transient_http_preserves_final_diagnostics(monkeypatch, status, operation):
+    calls, sleeps = [], []
+
+    async def record_sleep(delay):
+        sleeps.append(delay)
+
+    monkeypatch.setattr(base_client_module.asyncio, "sleep", record_sleep)
+
+    def handler(request):
+        calls.append(request)
+        request_id = f"00000000-0000-0000-0000-{len(calls):012d}"
+        return httpx.Response(
+            status, headers={"request-id": request_id, "Authorization": "do-not-display"},
+            json={"Code": "Unavailable", "Message": "Please try later."},
+        )
+
+    client = _make_client(monkeypatch, handler)
+
+    async def call():
+        if operation == "read":
+            return await client.list_project_plans("proj1")
+        return await client.create_project_plan(
+            "proj1", {"configuringAgentName": "EmployeeSelfServiceHRDA"},
+            "same-key" if operation == "keyed-create" else None,
+        )
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as error:
+        _run(client, call)
+
+    attempts = 1 if operation == "unkeyed-create" and status != 429 else client.max_retries
+    assert len(calls) == attempts
+    assert error.value.http_status == status
+    _assert_request_diagnostics(error.value, calls[-1], f"00000000-0000-0000-0000-{attempts:012d}")
+    assert len(sleeps) == attempts - 1
+    assert "Unavailable: Please try later." in str(error.value)
+    assert "do-not-display" not in str(error.value)
+    assert len({call.headers["client-request-id"] for call in calls}) == 1
+    if operation == "keyed-create":
+        assert {call.headers["Idempotency-Key"] for call in calls} == {"same-key"}
 
 
 def test_completion_metadata_counts_utf8_bytes_before_sending(monkeypatch):

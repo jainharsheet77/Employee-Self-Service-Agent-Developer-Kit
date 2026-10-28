@@ -120,8 +120,11 @@ merely to drain the queue:
 You never have to be asked to sync, and the sponsor never triggers it. The task
 reads **Complete locally - awaiting shared confirmation** until readback proves
 otherwise. A later pull preserves the completion and its outputs. The initial
-share maps unambiguous task titles to the server's new IDs; ambiguous/missing
-matches are conflicts to reconcile, never duplicate tasks to create silently.
+share associates the draft using its successful create response
+(`import-remote-plan --created-plan-file`, as described in `sync.md`) before
+mapping unique task titles to the server's new IDs. A normal pull cannot infer
+that association. Missing proof or ambiguous/missing matches preserve the draft
+and stop for reconciliation, never create duplicate tasks silently.
 
 ## Reconcile a first-run setup that already ran
 

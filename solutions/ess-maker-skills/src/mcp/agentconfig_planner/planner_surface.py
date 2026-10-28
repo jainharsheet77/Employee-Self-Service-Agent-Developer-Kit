@@ -254,7 +254,7 @@ class PlannerMixin:
                         "The entity changed since you read it (its ETag advanced "
                         f"from {etag} to {fresh}). Re-read it to get the current "
                         "ETag and state, then reapply your change if it is still "
-                        "needed.",
+                        f"needed. Original error: {error}",
                         http_status=412,
                     ) from error
                 raise
@@ -273,7 +273,7 @@ class PlannerMixin:
                         "tasks are read-only. Activate the plan with "
                         'update_project_plan patch {"status": "Active"} (plan '
                         "owner only) before updating, transitioning, "
-                        "completing, or deleting its tasks.",
+                        f"completing, or deleting its tasks. Original error: {error}",
                         http_status=409,
                     ) from error
                 raise

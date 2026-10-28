@@ -407,6 +407,9 @@ class AgentConfigBaseClient:
                         # committed server-side; replaying it risks a duplicate,
                         # so surface it instead of retrying.
                         response.raise_for_status()
+                    if attempt == self.max_retries - 1:
+                        # The final response must keep its status and diagnostics.
+                        response.raise_for_status()
                     wait = (2**attempt) + random.uniform(0, 1)
                     last_error = AgentConfigApiError(
                         f"Transient HTTP {response.status_code}"
